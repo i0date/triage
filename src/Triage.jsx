@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { Shield, AlertTriangle, MessageSquare, Loader2, ArrowRight, ExternalLink, AlertCircle } from 'lucide-react'
 
 export default function Triage() {
@@ -27,6 +27,14 @@ export default function Triage() {
   const [loading, setLoading] = useState(false)
   const [result, setResult]   = useState(null)
   const [error, setError]     = useState(null)
+
+  // 05 — Outcome tracking
+  const [outcomes, setOutcomes] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('triage_outcomes') || '[]') } catch { return [] }
+  })
+  useEffect(() => {
+    localStorage.setItem('triage_outcomes', JSON.stringify(outcomes))
+  }, [outcomes])
 
   // ─── Classify ────────────────────────────────────────────────────────────────
 
@@ -107,13 +115,26 @@ For classification "CONSUMER_DISPUTE": routing must be "GOODWILL_FIRST", routing
         .join('')
         .replace(/```json|```/g, '')
         .trim()
-      setResult(JSON.parse(text))
+      const parsed = JSON.parse(text)
+      setResult(parsed)
+      setOutcomes(prev => [{
+        id: `T-${Date.now().toString(36).toUpperCase().slice(-5)}`,
+        date: new Date().toISOString(),
+        merchant: merchant || '—',
+        amount: amount ? `${amount} ${currency}` : '—',
+        verdict: parsed.classification,
+        confidence: parsed.confidence,
+        outcome: 'pending',
+      }, ...prev].slice(0, 100))
     } catch (e) {
       setError(`Classification failed: ${e.message}`)
     } finally {
       setLoading(false)
     }
   }
+
+  const markOutcome = (id, val) =>
+    setOutcomes(prev => prev.map(o => o.id === id ? { ...o, outcome: val } : o))
 
   // ─── Classification appearance config ────────────────────────────────────────
 
@@ -146,6 +167,18 @@ For classification "CONSUMER_DISPUTE": routing must be "GOODWILL_FIRST", routing
       Icon: MessageSquare,
     },
   }
+
+  // ─── Outcome stats ─────────────────────────────────────────────────────────────
+  const resolved       = outcomes.filter(o => o.outcome !== 'pending')
+  const confirmedCount = outcomes.filter(o => o.outcome === 'confirmed').length
+  const accuracy       = resolved.length > 0 ? Math.round((confirmedCount / resolved.length) * 100) : null
+  const vcounts        = {
+    TRUE_FRAUD:        outcomes.filter(o => o.verdict === 'TRUE_FRAUD').length,
+    FIRST_PARTY_FRAUD: outcomes.filter(o => o.verdict === 'FIRST_PARTY_FRAUD').length,
+    CONSUMER_DISPUTE:  outcomes.filter(o => o.verdict === 'CONSUMER_DISPUTE').length,
+  }
+  const leadingVerdict = Object.entries(vcounts).sort((a, b) => b[1] - a[1])[0]
+  const leadingLabel   = leadingVerdict[1] > 0 ? leadingVerdict[0].split('_').join(' ') : '—'
 
   const cfg = result ? classConfig[result.classification] : null
 
@@ -565,6 +598,85 @@ For classification "CONSUMER_DISPUTE": routing must be "GOODWILL_FIRST", routing
             )}
           </div>
         </div>
+
+        {/* ── Section 05: Outcome Log ──────────────────────────────────────────── */}
+        {outcomes.length > 0 && (
+          <div className="mt-12 sm:mt-16">
+            <hr className="section-rule" style={{ margin: '0 0 28px 0' }} />
+            <div className="flex items-baseline gap-3 mb-6 flex-wrap">
+              <span className="mono-font text-xs text-stone-400">05</span>
+              <h2 className="display-font font-semibold text-2xl text-stone-900" style={{ letterSpacing: '-0.01em' }}>Outcome Log</h2>
+              <span className="mono-font text-xs text-stone-400 ml-auto">{outcomes.length} CASE{outcomes.length !== 1 ? 'S' : ''} CLASSIFIED</span>
+            </div>
+
+            {/* Stats */}
+            <div className="grid grid-cols-3 gap-3 mb-6">
+              {[
+                { label: 'TOTAL',          value: outcomes.length,                            sub: 'classified'                                                   },
+                { label: 'ACCURACY',       value: accuracy !== null ? `${accuracy}%` : '—',  sub: `${resolved.length} resolved`                                  },
+                { label: 'LEADING VERDICT', value: leadingLabel,                              sub: leadingVerdict[1] > 0 ? `${leadingVerdict[1]} case${leadingVerdict[1] !== 1 ? 's' : ''}` : '' },
+              ].map(s => (
+                <div key={s.label} className="border border-stone-200 p-4" style={{ background: '#FAF7F1' }}>
+                  <div className="mono-font text-xs tracking-widest text-stone-400 mb-1">{s.label}</div>
+                  <div className="display-font font-semibold text-stone-900" style={{ fontSize: '22px', letterSpacing: '-0.02em' }}>{s.value}</div>
+                  <div className="mono-font text-xs text-stone-400 mt-0.5">{s.sub}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Case list */}
+            <div className="border border-stone-200 overflow-hidden" style={{ background: '#FAF7F1' }}>
+              <div className="overflow-x-auto">
+                <div style={{ minWidth: '600px' }}>
+                  <div className="grid px-4 py-2 border-b border-stone-200" style={{ gridTemplateColumns: '80px 70px 1fr 90px 1fr' }}>
+                    {['CASE', 'DATE', 'MERCHANT', 'AMOUNT', 'VERDICT / OUTCOME'].map(h => (
+                      <span key={h} className="mono-font text-xs tracking-widest text-stone-400">{h}</span>
+                    ))}
+                  </div>
+                  <div style={{ maxHeight: '320px', overflowY: 'auto' }}>
+                    {outcomes.map(o => {
+                      const vc = classConfig[o.verdict]
+                      return (
+                        <div key={o.id} className="grid px-4 py-3 border-b border-stone-100 items-center" style={{ gridTemplateColumns: '80px 70px 1fr 90px 1fr' }}>
+                          <span className="mono-font text-xs text-stone-400">{o.id}</span>
+                          <span className="mono-font text-xs text-stone-500">{new Date(o.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+                          <span className="display-font text-sm text-stone-700 truncate pr-3">{o.merchant}</span>
+                          <span className="mono-font text-xs text-stone-600">{o.amount}</span>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="mono-font text-xs px-2 py-0.5 shrink-0" style={{ background: vc.bg, color: vc.badgeText }}>
+                              {vc.label}
+                            </span>
+                            {o.outcome === 'pending' ? (
+                              <div className="flex gap-1">
+                                <button onClick={() => markOutcome(o.id, 'confirmed')}
+                                  className="mono-font text-xs px-2 py-0.5 border border-emerald-700 text-emerald-700 hover:bg-emerald-50 transition-colors"
+                                  title="Verdict was correct">✓</button>
+                                <button onClick={() => markOutcome(o.id, 'overridden')}
+                                  className="mono-font text-xs px-2 py-0.5 border border-red-700 text-red-700 hover:bg-red-50 transition-colors"
+                                  title="Verdict was overridden">✗</button>
+                              </div>
+                            ) : (
+                              <span className={`mono-font text-xs ${o.outcome === 'confirmed' ? 'text-emerald-700' : 'text-red-700'}`}>
+                                {o.outcome === 'confirmed' ? '✓ CONFIRMED' : '✗ OVERRIDDEN'}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-3 flex justify-end">
+              <button
+                onClick={() => { if (window.confirm('Clear all outcome history?')) setOutcomes([]) }}
+                className="mono-font text-xs tracking-widest text-stone-400 hover:text-stone-600 transition-colors"
+              >CLEAR LOG</button>
+            </div>
+          </div>
+        )}
 
         {/* ── Footer ───────────────────────────────────────────────────────────── */}
         <div className="mt-12 sm:mt-16 pt-6 flex flex-col sm:flex-row sm:items-baseline justify-between text-stone-500 gap-2" style={{ borderTop: '1px solid #D4CCBC' }}>
