@@ -196,18 +196,19 @@ For classification "CONSUMER_DISPUTE": routing must be "GOODWILL_FIRST", routing
         {/* ── Masthead ─────────────────────────────────────────────────────────── */}
         <div className="border-b-2 border-black pb-6 mb-8 sm:pb-8 sm:mb-12">
           <div className="flex items-baseline justify-between mb-3 flex-wrap gap-2">
-            <div className="mono-font text-xs tracking-widest text-stone-600">ISSUE Nº 003 — FRAUD &amp; DISPUTES TRIAGE</div>
+            <div className="mono-font text-xs tracking-widest text-stone-600 hidden sm:block">ISSUE Nº 003 — FRAUD &amp; DISPUTES TRIAGE</div>
+            <div className="mono-font text-xs tracking-widest text-stone-600 sm:hidden">FRAUD &amp; DISPUTES TRIAGE</div>
             <div className="mono-font text-xs tracking-widest text-stone-600">
               {new Date().toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' }).toUpperCase()}
             </div>
           </div>
           <h1
             className="display-font font-bold text-stone-900 leading-none"
-            style={{ fontSize: 'clamp(52px, 8vw, 96px)', letterSpacing: '-0.03em' }}
+            style={{ fontSize: 'clamp(48px, 8vw, 96px)', letterSpacing: '-0.03em' }}
           >
             <span style={{ fontWeight: 700 }}>Tri</span><span style={{ fontStyle: 'italic', fontWeight: 500 }}>age</span>
           </h1>
-          <p className="display-font text-stone-700 mt-4 max-w-2xl" style={{ fontSize: '17px', lineHeight: '1.55' }}>
+          <p className="display-font text-stone-700 mt-3 sm:mt-4 max-w-2xl" style={{ fontSize: 'clamp(15px, 2vw, 17px)', lineHeight: '1.55' }}>
             Classify incoming dispute claims before anything is filed — true fraud, first-party fraud, or consumer dispute. Every case routed to the right resolution path from the first call.
           </p>
         </div>
@@ -566,7 +567,7 @@ For classification "CONSUMER_DISPUTE": routing must be "GOODWILL_FIRST", routing
         </div>
 
         {/* ── Footer ───────────────────────────────────────────────────────────── */}
-        <div className="mt-16 pt-6 flex items-baseline justify-between text-stone-500 flex-wrap gap-2" style={{ borderTop: '1px solid #D4CCBC' }}>
+        <div className="mt-12 sm:mt-16 pt-6 flex flex-col sm:flex-row sm:items-baseline justify-between text-stone-500 gap-2" style={{ borderTop: '1px solid #D4CCBC' }}>
           <div className="mono-font text-xs tracking-widest">BUILT BY ADEOTI FASHOKUN — RISK &amp; TRUST OPERATIONS</div>
           <div className="display-font italic text-sm">"Classify before you file. The routing matters."</div>
         </div>
