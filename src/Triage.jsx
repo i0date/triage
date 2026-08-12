@@ -1,6 +1,15 @@
 import React, { useState, useEffect } from 'react'
 import { Shield, AlertTriangle, MessageSquare, Loader2, ArrowRight, ExternalLink, AlertCircle, Send, Lock } from 'lucide-react'
 
+// ── Transaction types per account type ──────────────────────────────────────
+const TX_TYPES = {
+  debit:   ['Card-Present (In-person)', 'Card-Not-Present (Online)', 'Card-Not-Present (Phone order)', 'Digital Payment / Wallet', 'ATM Withdrawal'],
+  credit:  ['Card-Present (In-person)', 'Card-Not-Present (Online)', 'Card-Not-Present (Phone order)', 'Digital Payment / Wallet', 'Recurring / Subscription'],
+  p2p:     ['Zelle', 'Interac e-Transfer', 'P2P (Venmo / Cash App / PayPal)', 'Wire Transfer'],
+  ach_eft: ['ACH / EFT Transfer', 'Wire Transfer', 'Bill Payment (ACH)'],
+  bnpl:    ['BNPL Purchase', 'Recurring / Subscription'],
+}
+
 export default function Triage() {
 
   // ── 01 Transaction details ──────────────────────────────────────────────────
@@ -12,23 +21,22 @@ export default function Triage() {
   const [transactionType, setTransactionType] = useState('')
 
   // ── 02 Claim & context ──────────────────────────────────────────────────────
-  const [flaggedBy, setFlaggedBy]             = useState('')
-  const [customerReason, setCustomerReason]   = useState('')
+  const [flaggedBy, setFlaggedBy]           = useState('')
+  const [customerReason, setCustomerReason] = useState('')
 
   // ── 03 Risk signals — cardholder ────────────────────────────────────────────
-  const [priorDisputes, setPriorDisputes]     = useState('')
-  const [accountAge, setAccountAge]           = useState('')
-  const [daysSince, setDaysSince]             = useState('')
-  const [cardPossession, setCardPossession]   = useState('')
+  const [priorDisputes, setPriorDisputes]   = useState('')
+  const [accountAge, setAccountAge]         = useState('')
+  const [cardPossession, setCardPossession] = useState('')
 
   // ── 03 Risk signals — account integrity (ATO) ───────────────────────────────
-  const [accountChanges, setAccountChanges]   = useState('')
-  const [deviceRecognized, setDeviceRecognized] = useState('')
+  const [accountChanges, setAccountChanges]       = useState('')
+  const [deviceRecognized, setDeviceRecognized]   = useState('')
 
-  // ── 03 Risk signals — merchant ──────────────────────────────────────────────
-  const [vfmp, setVfmp]                           = useState('')
-  const [merchantDisputeRate, setMerchantDisputeRate] = useState('')
-  const [mccRisk, setMccRisk]                     = useState('')
+  // ── 03 Risk signals — merchant (card-based only) ────────────────────────────
+  const [vfmp, setVfmp]                                   = useState('')
+  const [merchantDisputeRate, setMerchantDisputeRate]     = useState('')
+  const [mccRisk, setMccRisk]                             = useState('')
 
   const [loading, setLoading] = useState(false)
   const [result, setResult]   = useState(null)
@@ -42,7 +50,21 @@ export default function Triage() {
     localStorage.setItem('triage_outcomes', JSON.stringify(outcomes))
   }, [outcomes])
 
-  // ── Computed: Reg framework from account type ────────────────────────────────
+  // ── Reset transaction type when account type changes ─────────────────────────
+  useEffect(() => {
+    if (accountType && transactionType) {
+      const validTypes = TX_TYPES[accountType] ?? []
+      if (!validTypes.includes(transactionType)) setTransactionType('')
+    }
+  }, [accountType])
+
+  // ── Computed values ──────────────────────────────────────────────────────────
+  const isCardBased = accountType === 'debit' || accountType === 'credit'
+
+  const daysSinceTransaction = transactionDate
+    ? Math.floor((Date.now() - new Date(transactionDate).getTime()) / 86400000)
+    : null
+
   const regFramework =
     accountType === 'debit' || accountType === 'ach_eft' ? 'REG_E' :
     accountType === 'credit'                             ? 'REG_Z' :
@@ -50,10 +72,10 @@ export default function Triage() {
     accountType === 'bnpl'                               ? 'REG_Z_PROVIDER' : null
 
   const regLabel =
-    regFramework === 'REG_E'          ? 'REG E'             :
-    regFramework === 'REG_Z'          ? 'REG Z'             :
-    regFramework === 'PROVIDER'       ? 'PROVIDER-HANDLED'  :
-    regFramework === 'REG_Z_PROVIDER' ? 'REG Z / PROVIDER'  : null
+    regFramework === 'REG_E'          ? 'REG E'            :
+    regFramework === 'REG_Z'          ? 'REG Z'            :
+    regFramework === 'PROVIDER'       ? 'PROVIDER-HANDLED' :
+    regFramework === 'REG_Z_PROVIDER' ? 'REG Z / PROVIDER' : null
 
   const regSubtext =
     regFramework === 'REG_E'          ? 'Debit / EFT — Electronic Fund Transfer Act applies' :
@@ -66,15 +88,13 @@ export default function Triage() {
     regFramework === 'REG_Z'    ? { bg: '#4C1D95', text: '#DDD6FE' } :
                                   { bg: '#374151', text: '#D1D5DB' }
 
-  // ── Provisional credit flag (Reg E only, fraud verdicts) ────────────────────
   const provisionalCreditApplies = regFramework === 'REG_E' && result &&
     (result.classification === 'TRUE_FRAUD' || result.classification === 'AUTHORIZED_PUSH_PAYMENT')
 
-  // ── Weight badge style helper ────────────────────────────────────────────────
-  const weightStyle = (weight) =>
-    weight === 'HIGH'   ? { bg: '#1A1814', text: '#F5F1EA' } :
-    weight === 'MEDIUM' ? { bg: '#6B5F4D', text: '#FAF7F1' } :
-                          { bg: '#D4CCBC', text: '#1A1814' }
+  const weightStyle = (w) =>
+    w === 'HIGH'   ? { bg: '#1A1814', text: '#F5F1EA' } :
+    w === 'MEDIUM' ? { bg: '#6B5F4D', text: '#FAF7F1' } :
+                     { bg: '#D4CCBC', text: '#1A1814' }
 
   // ── Classification appearance config ────────────────────────────────────────
   const classConfig = {
@@ -110,7 +130,7 @@ export default function Triage() {
   }
   const leadingVerdict = Object.entries(vcounts).sort((a, b) => b[1] - a[1])[0]
   const leadingLabel   = leadingVerdict[1] > 0
-    ? classConfig[leadingVerdict[0]]?.label ?? leadingVerdict[0].split('_').join(' ')
+    ? (classConfig[leadingVerdict[0]]?.label ?? leadingVerdict[0].split('_').join(' '))
     : '—'
 
   // ── Classify ─────────────────────────────────────────────────────────────────
@@ -121,20 +141,23 @@ export default function Triage() {
     setError(null)
     setResult(null)
 
-    const prompt = `You are an expert fraud and disputes triage analyst at a financial institution. Classify this incoming dispute claim. You serve credit unions, banks, fintechs, and lenders — your output must apply regardless of institution type.
+    const accountTypeLabel = { debit: 'Debit Card', credit: 'Credit Card', p2p: 'P2P / e-Transfer', ach_eft: 'ACH / EFT', bnpl: 'BNPL (Buy Now Pay Later)' }[accountType] ?? 'Not specified'
+    const daysNote = daysSinceTransaction !== null ? `${daysSinceTransaction} days ago (transaction date: ${transactionDate})` : 'Unknown'
+
+    const prompt = `You are an expert fraud and disputes triage analyst at a financial institution. Classify this incoming dispute claim. You serve credit unions, banks, fintechs, and lenders.
 
 FOUR VERDICT DEFINITIONS:
-- TRUE_FRAUD: A third party used the account/card without the cardholder's knowledge or consent. The cardholder is a genuine victim of unauthorized access or card compromise.
-- FIRST_PARTY_FRAUD: The cardholder made the transaction themselves and is falsely disputing it to obtain a refund. Also called friendly fraud or chargeback abuse.
-- CONSUMER_DISPUTE: The cardholder made the transaction legitimately but has a genuine grievance — goods not received, item not as described, cancelled subscription still charged, credit not processed, service failure, or misrepresentation.
-- AUTHORIZED_PUSH_PAYMENT: The cardholder deliberately authorized and initiated the payment themselves, but was deceived into doing so via social engineering. They believed the transfer was legitimate. Common scenarios: romance scams, fake invoice/vendor fraud, buyer-seller scams, investment fraud, fake family emergency, impersonation of a government official or bank employee. Applies primarily to Zelle, Interac e-Transfer, wire transfers, and P2P payments.
+- TRUE_FRAUD: A third party used the account/card without the cardholder's knowledge or consent. Genuine victim of unauthorized access or card compromise.
+- FIRST_PARTY_FRAUD: The cardholder made the transaction themselves and is falsely disputing it. Friendly fraud / chargeback abuse.
+- CONSUMER_DISPUTE: Cardholder made the transaction legitimately but has a genuine grievance — non-receipt, item not as described, cancelled subscription, credit not processed, service failure, or misrepresentation.
+- AUTHORIZED_PUSH_PAYMENT: Cardholder deliberately authorized and initiated the payment but was deceived into doing so via social engineering (romance scam, fake invoice, buyer-seller fraud, investment scam, impersonation). They believed it was legitimate. Applies primarily to Zelle, Interac e-Transfer, wire transfers, and P2P payments.
 
 ACCOUNT & TRANSACTION:
-- Account Type: ${accountType ? { debit: 'Debit Card', credit: 'Credit Card', p2p: 'P2P / e-Transfer', ach_eft: 'ACH / EFT', bnpl: 'BNPL (Buy Now Pay Later)' }[accountType] : 'Not specified'}
+- Account Type: ${accountTypeLabel}
 - Regulatory Framework: ${regFramework ?? 'Unknown'}
 - Merchant / Recipient: ${merchant || 'Not provided'}
 - Amount: ${amount ? `${amount} ${currency}` : 'Not provided'}
-- Transaction Date: ${transactionDate || 'Not provided'}
+- Transaction occurred: ${daysNote}
 - Transaction Type: ${transactionType || 'Not provided'}
 
 CLAIM:
@@ -144,56 +167,50 @@ CLAIM:
 CARDHOLDER RISK SIGNALS:
 - Prior disputes (12 months): ${priorDisputes || 'Unknown'}
 - Account age: ${accountAge || 'Unknown'}
-- Days since transaction: ${daysSince || 'Unknown'}
-- Card in possession when reported: ${cardPossession || 'Unknown'}
+${isCardBased ? `- Card in possession when reported: ${cardPossession || 'Unknown'}` : '- Physical card: N/A (non-card payment rail)'}
 
 ACCOUNT INTEGRITY SIGNALS:
 - Recent account changes (login, password, contact details): ${accountChanges || 'Unknown'}
 - Device / location at time of transaction: ${deviceRecognized || 'Unknown'}
 
-MERCHANT / RECIPIENT RISK SIGNALS:
+${isCardBased ? `MERCHANT RISK SIGNALS:
 - VFMP listed: ${vfmp || 'Unknown'}
 - Merchant dispute rate: ${merchantDisputeRate || 'Unknown'}
-- MCC risk tier: ${mccRisk || 'Unknown'}
+- MCC risk tier: ${mccRisk || 'Unknown'}` : `MERCHANT SIGNALS: N/A — non-card payment rail. Routing should follow ${regFramework === 'PROVIDER' ? 'recipient FI contact / network recall' : regFramework === 'NACHA' ? 'NACHA return code' : 'provider dispute process'}.`}
 
 CLASSIFICATION GUIDANCE:
-TRUE_FRAUD: 0 prior disputes, account 3+ years, reported within 30 days, VFMP merchant, system alert, card lost/stolen, no suspicious account changes, known device.
+TRUE_FRAUD: 0 prior disputes, account 3+ years, reported within 30 days, VFMP merchant (card), system alert, card lost/stolen, no suspicious account changes, known device.
 FIRST_PARTY_FRAUD: 3+ prior disputes, account under 6 months, filed 60+ days after transaction, low-risk merchant, card in possession, customer-reported only, inconsistent claim.
-CONSUMER_DISPUTE: Specific grievance stated (non-receipt, cancellation, defect), 1–2 prior disputes, plausible for merchant category, customer attempted contact.
-AUTHORIZED_PUSH_PAYMENT: Customer explicitly authorized the transfer but describes being deceived — romance, fake emergency, investment, impersonation. Payment rail is P2P, e-Transfer, Zelle, or wire. The transfer itself was authorized; the deception was external.
+CONSUMER_DISPUTE: Specific grievance stated, 1–2 prior disputes, plausible for merchant category, customer attempted merchant contact.
+AUTHORIZED_PUSH_PAYMENT: Customer explicitly authorized the transfer but describes being deceived — romance, fake emergency, impersonation, investment. Rail is P2P/e-Transfer/Zelle/wire.
 
-ATO DETECTION: If recent account changes (login/password/contact) AND new/unrecognized device/location AND fraudulent activity are all present — set ato_suspected to true. ATO should be escalated to the security team in parallel with any dispute filing.
+ATO DETECTION: If recent account changes (login/password/contact) AND new/unrecognized device/location AND fraudulent activity are all present — set ato_suspected true.
 
-ROUTING LOGIC (factor in account type, payment rail, and classification):
-- Debit or credit card dispute (TRUE_FRAUD, CONSUMER_DISPUTE) → card network chargeback. Use "VISA_CHARGEBACK" or "MC_CHARGEBACK" if network is known; otherwise "CARD_CHARGEBACK".
-- ACH / EFT dispute → NACHA return code path. Use "NACHA_RETURN".
-- P2P / Zelle / Interac e-Transfer / wire (TRUE_FRAUD or AUTHORIZED_PUSH_PAYMENT) → contact recipient's financial institution, initiate network recall where applicable. Use "RECIPIENT_FI".
-- BNPL dispute → contact the BNPL provider directly; this is not a card network chargeback. Use "PROVIDER_DISPUTE".
-- FIRST_PARTY_FRAUD (any rail) → flag for internal investigation; do not file. Use "FLAG_INVESTIGATION".
-- CONSUMER_DISPUTE (any rail) → attempt goodwill or merchant outreach first. Use "GOODWILL_FIRST".
-- Suspected ATO regardless of rail → add SECURITY_ESCALATION note.
+ROUTING LOGIC:
+- Debit or credit card → card network chargeback: "CARD_CHARGEBACK"
+- ACH / EFT → NACHA return code: "NACHA_RETURN"
+- P2P / Zelle / e-Transfer / wire (fraud or APP) → recipient FI contact + network recall: "RECIPIENT_FI"
+- BNPL → provider dispute: "PROVIDER_DISPUTE"
+- FIRST_PARTY_FRAUD (any rail) → do not file: "FLAG_INVESTIGATION"
+- CONSUMER_DISPUTE → goodwill/merchant outreach first: "GOODWILL_FIRST"
 
-SIGNAL INFLUENCE: For signal_influences, list 3–5 specific signals from the data above that most influenced your verdict. Each entry shows what the signal was, how strongly it weighed (HIGH / MEDIUM / LOW), and which verdict it pushed toward. Be specific — reference actual values from the inputs (e.g. "Zero prior disputes in 12 months" not just "Prior dispute history").
+SIGNAL INFLUENCE: List 3–5 signals that most drove the verdict. Reference specific values from the inputs (e.g. "Zero prior disputes" not just "Dispute history"). Include which verdict each signal pushed toward.
 
-Return ONLY valid JSON with no markdown:
+Return ONLY valid JSON, no markdown:
 {
   "classification": "TRUE_FRAUD" | "FIRST_PARTY_FRAUD" | "CONSUMER_DISPUTE" | "AUTHORIZED_PUSH_PAYMENT",
   "confidence": "HIGH" | "MEDIUM" | "LOW",
   "label": "True Fraud" | "First-Party Fraud" | "Consumer Dispute" | "Authorized Push Payment",
   "headline": "One tight sentence summarizing the triage assessment.",
-  "signals": [
-    "Signal 1 — specific observation from the data provided",
-    "Signal 2 — specific observation from the data provided",
-    "Signal 3 — specific observation from the data provided"
-  ],
+  "signals": ["Signal 1", "Signal 2", "Signal 3"],
   "signal_influences": [
     { "signal": "Specific signal from inputs", "weight": "HIGH" | "MEDIUM" | "LOW", "toward": "TRUE_FRAUD" | "FIRST_PARTY_FRAUD" | "CONSUMER_DISPUTE" | "AUTHORIZED_PUSH_PAYMENT" }
   ],
   "ato_suspected": true | false,
   "ato_note": "Brief ATO note if suspected, empty string otherwise.",
-  "routing": "VISA_CHARGEBACK" | "MC_CHARGEBACK" | "CARD_CHARGEBACK" | "NACHA_RETURN" | "RECIPIENT_FI" | "PROVIDER_DISPUTE" | "FLAG_INVESTIGATION" | "GOODWILL_FIRST",
-  "routing_label": "Human-readable routing label (e.g. 'File Card Network Chargeback')",
-  "routing_detail": "1–2 sentences: exactly what the agent should do next, including any time-sensitive steps.",
+  "routing": "CARD_CHARGEBACK" | "NACHA_RETURN" | "RECIPIENT_FI" | "PROVIDER_DISPUTE" | "FLAG_INVESTIGATION" | "GOODWILL_FIRST",
+  "routing_label": "Human-readable routing label",
+  "routing_detail": "1–2 sentences on what the agent should do next, including time-sensitive steps.",
   "risk_notes": "Caveats or watch-outs — or empty string if none.",
   "proceed_to_dispute": true | false
 }`
@@ -325,7 +342,7 @@ Return ONLY valid JSON with no markdown:
                 </select>
               </div>
 
-              {/* Reg framework badge — shown as soon as account type is selected */}
+              {/* Reg framework badge */}
               {regLabel && (
                 <div className="flex items-start gap-3 py-2">
                   <span className="mono-font text-xs px-2 py-1 shrink-0" style={{ background: regColor.bg, color: regColor.text }}>
@@ -358,32 +375,45 @@ Return ONLY valid JSON with no markdown:
                 <div>
                   <label className="input-label">Transaction Date</label>
                   <input type="date" value={transactionDate} onChange={e => setTransactionDate(e.target.value)} className="input-field mono-font" style={{ fontSize: '13px' }} />
+                  {/* Auto-compute days since — show as inline confirmation */}
+                  {daysSinceTransaction !== null && (
+                    <div className="mono-font text-xs text-stone-400 mt-1.5">
+                      {daysSinceTransaction === 0 ? 'Today' : `${daysSinceTransaction} day${daysSinceTransaction !== 1 ? 's' : ''} ago`}
+                    </div>
+                  )}
                 </div>
                 <div>
                   <label className="input-label">Transaction Type</label>
                   <select value={transactionType} onChange={e => setTransactionType(e.target.value)} className="input-field" style={{ fontSize: '14px' }}>
                     <option value="">Select type…</option>
-                    <optgroup label="Card">
-                      <option>Card-Present (In-person)</option>
-                      <option>Card-Not-Present (Online)</option>
-                      <option>Card-Not-Present (Phone order)</option>
-                      <option>Recurring / Subscription</option>
-                      <option>ATM Withdrawal</option>
-                    </optgroup>
-                    <optgroup label="Digital / P2P">
-                      <option>Digital Payment / Wallet</option>
-                      <option>Zelle</option>
-                      <option>Interac e-Transfer</option>
-                      <option>P2P (Venmo / Cash App / PayPal)</option>
-                    </optgroup>
-                    <optgroup label="Transfer">
-                      <option>ACH / EFT Transfer</option>
-                      <option>Wire Transfer</option>
-                      <option>Bill Payment (ACH)</option>
-                    </optgroup>
-                    <optgroup label="Lending">
-                      <option>BNPL Purchase</option>
-                    </optgroup>
+                    {accountType && TX_TYPES[accountType]
+                      ? TX_TYPES[accountType].map(t => <option key={t}>{t}</option>)
+                      : (
+                        <>
+                          <optgroup label="Card">
+                            <option>Card-Present (In-person)</option>
+                            <option>Card-Not-Present (Online)</option>
+                            <option>Card-Not-Present (Phone order)</option>
+                            <option>Recurring / Subscription</option>
+                            <option>ATM Withdrawal</option>
+                          </optgroup>
+                          <optgroup label="Digital / P2P">
+                            <option>Digital Payment / Wallet</option>
+                            <option>Zelle</option>
+                            <option>Interac e-Transfer</option>
+                            <option>P2P (Venmo / Cash App / PayPal)</option>
+                          </optgroup>
+                          <optgroup label="Transfer">
+                            <option>ACH / EFT Transfer</option>
+                            <option>Wire Transfer</option>
+                            <option>Bill Payment (ACH)</option>
+                          </optgroup>
+                          <optgroup label="Lending">
+                            <option>BNPL Purchase</option>
+                          </optgroup>
+                        </>
+                      )
+                    }
                   </select>
                 </div>
               </div>
@@ -458,24 +488,17 @@ Return ONLY valid JSON with no markdown:
                     <option>3+ years</option>
                   </select>
                 </div>
-                <div>
-                  <label className="input-label">Days Since Transaction</label>
-                  <select value={daysSince} onChange={e => setDaysSince(e.target.value)} className="input-field" style={{ fontSize: '14px' }}>
-                    <option value="">Unknown</option>
-                    <option>0–30 days</option>
-                    <option>31–60 days</option>
-                    <option>61–90 days</option>
-                    <option>Over 90 days</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="input-label">Card in Possession When Reported</label>
-                  <select value={cardPossession} onChange={e => setCardPossession(e.target.value)} className="input-field" style={{ fontSize: '14px' }}>
-                    <option value="">Unknown</option>
-                    <option>Yes — card in hand</option>
-                    <option>No — card lost or stolen</option>
-                  </select>
-                </div>
+                {/* Card possession — only makes sense for physical card products */}
+                {isCardBased && (
+                  <div className="sm:col-span-2">
+                    <label className="input-label">Card in Possession When Reported</label>
+                    <select value={cardPossession} onChange={e => setCardPossession(e.target.value)} className="input-field" style={{ fontSize: '14px' }}>
+                      <option value="">Unknown</option>
+                      <option>Yes — card in hand</option>
+                      <option>No — card lost or stolen</option>
+                    </select>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -502,38 +525,40 @@ Return ONLY valid JSON with no markdown:
               </div>
             </div>
 
-            {/* Merchant signals */}
-            <div>
-              <div className="sub-label ml-0">Merchant</div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <label className="input-label">VFMP Listed</label>
-                  <select value={vfmp} onChange={e => setVfmp(e.target.value)} className="input-field" style={{ fontSize: '14px' }}>
-                    <option value="">Unknown</option>
-                    <option value="Yes — VFMP listed">Yes</option>
-                    <option value="No — not VFMP listed">No</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="input-label">Merchant Dispute Rate</label>
-                  <select value={merchantDisputeRate} onChange={e => setMerchantDisputeRate(e.target.value)} className="input-field" style={{ fontSize: '14px' }}>
-                    <option value="">Unknown</option>
-                    <option value="Low (under 1%)">Low (&lt;1%)</option>
-                    <option value="Medium (1–2%)">Medium</option>
-                    <option value="High (over 2%)">High (&gt;2%)</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="input-label">MCC Risk Tier</label>
-                  <select value={mccRisk} onChange={e => setMccRisk(e.target.value)} className="input-field" style={{ fontSize: '14px' }}>
-                    <option value="">Unknown</option>
-                    <option value="Low risk MCC">Low</option>
-                    <option value="Medium risk MCC">Medium</option>
-                    <option value="High risk MCC (travel, digital goods, gambling)">High</option>
-                  </select>
+            {/* Merchant signals — card-based only (VFMP, MCC are card-network concepts) */}
+            {isCardBased && (
+              <div>
+                <div className="sub-label ml-0">Merchant</div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="input-label">VFMP Listed</label>
+                    <select value={vfmp} onChange={e => setVfmp(e.target.value)} className="input-field" style={{ fontSize: '14px' }}>
+                      <option value="">Unknown</option>
+                      <option value="Yes — VFMP listed">Yes</option>
+                      <option value="No — not VFMP listed">No</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="input-label">Merchant Dispute Rate</label>
+                    <select value={merchantDisputeRate} onChange={e => setMerchantDisputeRate(e.target.value)} className="input-field" style={{ fontSize: '14px' }}>
+                      <option value="">Unknown</option>
+                      <option value="Low (under 1%)">Low (&lt;1%)</option>
+                      <option value="Medium (1–2%)">Medium</option>
+                      <option value="High (over 2%)">High (&gt;2%)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="input-label">MCC Risk Tier</label>
+                    <select value={mccRisk} onChange={e => setMccRisk(e.target.value)} className="input-field" style={{ fontSize: '14px' }}>
+                      <option value="">Unknown</option>
+                      <option value="Low risk MCC">Low</option>
+                      <option value="Medium risk MCC">Medium</option>
+                      <option value="High risk MCC (travel, digital goods, gambling)">High</option>
+                    </select>
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
 
             {/* CTA button */}
             <div className="mt-8">
@@ -596,9 +621,7 @@ Return ONLY valid JSON with no markdown:
                 {/* Verdict card */}
                 <div className="p-6" style={{ background: cfg.bg }}>
                   <div className="flex items-start justify-between mb-4 flex-wrap gap-2">
-                    <div className="mono-font text-xs tracking-widest" style={{ color: cfg.badgeText, opacity: 0.8 }}>
-                      TRIAGE VERDICT
-                    </div>
+                    <div className="mono-font text-xs tracking-widest" style={{ color: cfg.badgeText, opacity: 0.8 }}>TRIAGE VERDICT</div>
                     <div className="mono-font text-xs px-2 py-1" style={{ background: cfg.badge, color: cfg.badgeText }}>
                       {result.confidence} CONFIDENCE
                     </div>
@@ -630,7 +653,7 @@ Return ONLY valid JSON with no markdown:
                   <div className="border p-4" style={{ borderColor: '#1D4ED8', background: '#EFF6FF' }}>
                     <div className="mono-font text-xs tracking-widest mb-2" style={{ color: '#1E3A8A' }}>REG E — PROVISIONAL CREDIT</div>
                     <p className="display-font text-stone-900 text-[14px] leading-relaxed">
-                      This Reg E dispute must be resolved within <strong>10 business days</strong> of the complaint date — or provisional credit must be issued to the member's account. Investigation may extend to <strong>45 business days</strong> (90 days for POS, international, or new accounts) with provisional credit posted.
+                      This Reg E dispute must be resolved within <strong>10 business days</strong> of the complaint date — or provisional credit must be issued. Investigation may extend to <strong>45 business days</strong> (90 days for POS, international, or new accounts) with provisional credit posted.
                     </p>
                   </div>
                 )}
@@ -731,9 +754,9 @@ Return ONLY valid JSON with no markdown:
             {/* Stats */}
             <div className="grid grid-cols-3 gap-3 mb-6">
               {[
-                { label: 'TOTAL',           value: outcomes.length,                           sub: 'classified'                                                                                     },
-                { label: 'ACCURACY',        value: accuracy !== null ? `${accuracy}%` : '—',  sub: `${resolved.length} resolved`                                                                   },
-                { label: 'LEADING VERDICT', value: leadingLabel,                              sub: leadingVerdict[1] > 0 ? `${leadingVerdict[1]} case${leadingVerdict[1] !== 1 ? 's' : ''}` : '' },
+                { label: 'TOTAL',           value: outcomes.length,                           sub: 'classified'                                                                                      },
+                { label: 'ACCURACY',        value: accuracy !== null ? `${accuracy}%` : '—',  sub: `${resolved.length} resolved`                                                                    },
+                { label: 'LEADING VERDICT', value: leadingLabel,                              sub: leadingVerdict[1] > 0 ? `${leadingVerdict[1]} case${leadingVerdict[1] !== 1 ? 's' : ''}` : ''  },
               ].map(s => (
                 <div key={s.label} className="border border-stone-200 p-4" style={{ background: '#FAF7F1' }}>
                   <div className="mono-font text-xs tracking-widest text-stone-400 mb-1">{s.label}</div>
