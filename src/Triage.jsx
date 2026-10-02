@@ -241,7 +241,7 @@ ACCOUNT & TRANSACTION:
 - Account Type: ${accountTypeLabel}
 - Regulatory Framework: ${regFramework ?? 'Unknown'}
 - Payment Network: ${network || 'Not specified'}
-- Merchant / Recipient: ${merchant || 'Not provided'}
+- ${isCrypto ? 'Destination Wallet / Platform' : 'Merchant / Recipient'}: ${merchant || 'Not provided'}
 - Amount: ${amount ? `${amount} ${currency}` : 'Not provided'}
 - Transaction occurred: ${daysNote}
 - Transaction Type: ${transactionType || 'Not provided'}${(isCrypto || detectedCrypto) ? `
@@ -280,6 +280,8 @@ CRYPTO SCENARIO GUIDANCE:
 - "Pig butchering / investment scam": AUTHORIZED_PUSH_PAYMENT — customer induced to deposit incrementally; recovery very limited without law enforcement.
 - "Wallet / exchange hack (unauthorized)": TRUE_FRAUD — unrecognized access; pursue exchange security team + law enforcement referral.
 - "NFT / digital asset fraud": TRUE_FRAUD or CONSUMER_DISPUTE — depends on whether customer authorized purchase on legitimate platform or was deceived about asset authenticity.
+- "Stablecoin transfer fraud (USDC/USDT used as wire substitute)": AUTHORIZED_PUSH_PAYMENT — customer was instructed to send stablecoins as payment or investment; no reversal path; same social engineering patterns as wire fraud. Treat urgently.
+- "FI-held crypto — unauthorized withdrawal from integrated wallet": TRUE_FRAUD — ATO on the FI's integrated crypto wallet; escalate to security team; blockchain trace critical.
 
 ATO DETECTION: If recent account changes (login/password/contact) AND new/unrecognized device/location AND fraudulent activity are all present — set ato_suspected true. For crypto: SIM-swap plus exchange account takeover is a strong ATO signal.
 
@@ -609,8 +611,8 @@ Return ONLY valid JSON, no markdown:
           </h1>
           <p className="display-font text-stone-700 mt-3 sm:mt-4 max-w-2xl" style={{ fontSize: 'clamp(15px, 2vw, 17px)', lineHeight: '1.55' }}>
             {isCE
-              ? 'Crypto exchange fraud triage. Four verdicts. FinCEN + FINTRAC aware. Built for exchange fraud analysts handling ATO, pig butchering, and consumer disputes on digital asset platforms.'
-              : 'Classify incoming dispute claims before anything is filed. Four verdicts. Every case routed by account type, payment rail, and regulatory framework — Reg E, Reg Z, NACHA, or provider.'}
+              ? 'Crypto exchange fraud triage. Four verdicts. FinCEN + FINTRAC aware. Built for exchange fraud analysts handling ATO, pig butchering, stablecoin fraud, and consumer disputes on digital asset platforms.'
+              : 'Classify incoming dispute claims before anything is filed. Four verdicts. Covers card, ACH, P2P, BNPL, and FI-held crypto and stablecoins — routed by payment rail and regulatory framework: Reg E, Reg Z, NACHA, or provider.'}
           </p>
 
           {/* ── Platform mode toggle ── */}
@@ -938,7 +940,7 @@ Return ONLY valid JSON, no markdown:
                   <option value="p2p">P2P / e-Transfer</option>
                   <option value="ach_eft">ACH / EFT</option>
                   <option value="bnpl">BNPL (Buy Now Pay Later)</option>
-                  <option value="crypto">Crypto / Digital Asset</option>
+                  <option value="crypto">Crypto / Digital Asset (FI-held)</option>
                 </select>
               </div>
 
@@ -993,18 +995,43 @@ Return ONLY valid JSON, no markdown:
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="input-label">Merchant / Recipient</label>
-                  <input type="text" value={merchant} onChange={e => setMerchant(e.target.value)} placeholder="e.g. TechGadget Co." className="input-field" />
+                  <label className="input-label">
+                    {isCrypto ? 'Destination Wallet / Platform' : 'Merchant / Recipient'}
+                  </label>
+                  <input
+                    type="text"
+                    value={merchant}
+                    onChange={e => setMerchant(e.target.value)}
+                    placeholder={isCrypto ? 'e.g. 0x1a2b… or Uniswap / receiving exchange' : 'e.g. TechGadget Co.'}
+                    className="input-field"
+                    style={isCrypto ? { fontFamily: 'JetBrains Mono, monospace', fontSize: '12px' } : {}}
+                  />
+                  {isCrypto && (
+                    <div className="mono-font text-xs text-stone-400 mt-1">Wallet address, exchange name, or DeFi protocol</div>
+                  )}
                 </div>
                 <div>
                   <label className="input-label">Amount</label>
                   <div className="flex gap-2">
                     <input type="text" value={amount} onChange={e => setAmount(e.target.value)} placeholder="284.00" className="input-field" style={{ flex: 2 }} />
                     <select value={currency} onChange={e => setCurrency(e.target.value)} className="input-field mono-font" style={{ flex: 1, fontSize: '13px' }}>
-                      <option>CAD</option>
-                      <option>USD</option>
-                      <option>EUR</option>
-                      <option>GBP</option>
+                      {isCrypto ? (
+                        <>
+                          <option>CAD</option>
+                          <option>USD</option>
+                          <option>BTC</option>
+                          <option>ETH</option>
+                          <option>USDC</option>
+                          <option>USDT</option>
+                        </>
+                      ) : (
+                        <>
+                          <option>CAD</option>
+                          <option>USD</option>
+                          <option>EUR</option>
+                          <option>GBP</option>
+                        </>
+                      )}
                     </select>
                   </div>
                 </div>
@@ -1215,6 +1242,8 @@ Return ONLY valid JSON, no markdown:
                       <option value="Pig butchering / investment scam">Pig butchering / investment scam</option>
                       <option value="Wallet / exchange hack (unauthorized access)">Wallet / exchange hack (unauthorized access)</option>
                       <option value="NFT / digital asset fraud">NFT / digital asset fraud</option>
+                      <option value="Stablecoin transfer fraud (USDC/USDT used as wire substitute)">Stablecoin fraud (USDC / USDT wire substitute)</option>
+                      <option value="FI-held crypto — unauthorized withdrawal from integrated wallet">FI-held crypto — unauthorized withdrawal</option>
                     </select>
                   </div>
                   <div>
