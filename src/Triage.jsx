@@ -80,6 +80,11 @@ export default function Triage() {
   const [ceCountry, setCeCountry]                       = useState('both') // 'us' | 'ca' | 'both'
   const [ceComplaint, setCeComplaint]                   = useState('')
   const [ceFlaggedBy, setCeFlaggedBy]                   = useState('')
+  const [ceSarDeadlineDate, setCeSarDeadlineDate]       = useState('')   // date incident reported (SAR countdown)
+  const [ceActionPlan, setCeActionPlan]                 = useState(null)
+  const [ceActionPlanLoading, setCeActionPlanLoading]   = useState(false)
+  const [ceActionPlanError, setCeActionPlanError]       = useState(null)
+  const [ceActionPlanCopied, setCeActionPlanCopied]     = useState(false)
 
   // ── 05 Outcome tracking ─────────────────────────────────────────────────────
   const [outcomes, setOutcomes] = useState(() => {
@@ -166,6 +171,12 @@ export default function Triage() {
   const ceSarFlagUS    = ceAmountNum >= 5000  && (ceCountry === 'us'   || ceCountry === 'both') && ceCurrency === 'USD'
   const ceStrFlagCA    = ceAmountNum >= 10000 && (ceCountry === 'ca'   || ceCountry === 'both') && ceCurrency === 'CAD'
   const ceSarRequired  = ceSarFlagUS || ceStrFlagCA
+  // SAR deadline countdown (30 days from date incident reported)
+  const ceSarDeadlineRaw = ceSarDeadlineDate
+    ? new Date(new Date(ceSarDeadlineDate).getTime() + 30 * 86400000)
+    : null
+  const ceSarDeadline  = ceSarDeadlineRaw ? ceSarDeadlineRaw.toLocaleDateString('en-CA') : null
+  const ceSarDaysLeft  = ceSarDeadlineRaw ? Math.ceil((ceSarDeadlineRaw - new Date()) / 86400000) : null
   const ceRegLabel     = ceCountry === 'us' ? 'FINCEN / FinCEN MSB' : ceCountry === 'ca' ? 'FINTRAC / PCMLTFA' : 'FinCEN (US) + FINTRAC (CA)'
   const ceRegSubtext   = ceCountry === 'us'
     ? 'FinCEN registration required; SAR if suspicious activity ≥ $5,000 USD'
@@ -471,6 +482,91 @@ Return ONLY valid JSON, no markdown:
       setError(`Classification failed: ${e.message}`)
     } finally {
       setLoading(false)
+    }
+  }
+
+  // ── CE deep action plan (runs after classifyCE) ─────────────────────────────
+  const generateCEActionPlan = async () => {
+    if (!result) return
+    setCeActionPlanLoading(true); setCeActionPlanError(null); setCeActionPlan(null)
+
+    const prompt = `You are a senior fraud operations analyst at a crypto exchange. Based on this triage classification, generate a complete operational action plan.
+
+INCIDENT CLASSIFICATION:
+- Verdict: ${result.classification} — ${result.label}
+- Headline: ${result.headline}
+- Routing: ${result.routing} — ${result.routing_label}
+- Confidence: ${result.confidence}
+- Routing Detail: ${result.routing_detail}
+
+TRANSACTION CONTEXT:
+- Exchange / Platform: ${ceReceivingExchange || 'Not specified'}
+- Asset: ${ceAsset || 'Not specified'}${ceChain ? ' on ' + ceChain : ''}
+- Transaction Type: ${ceTxType || 'Not specified'}
+- Amount: ${ceAmount ? ceAmount + ' ' + ceCurrency : 'Not specified'}
+- Transaction Date: ${ceTxDate || 'Not specified'}${ceDaysSince !== null ? ' (' + ceDaysSince + ' days ago)' : ''}
+- Destination Type: ${ceDestinationType || 'Unknown'}
+- Destination: ${ceDestinationAddress || 'Not specified'}
+- Receiving Exchange: ${ceReceivingExchange || 'Unknown'}
+- Blockchain Trace: ${ceBlockchainTrace || 'Unknown'}
+
+ACCOUNT CONTEXT:
+- Compromise Vector: ${ceCompromiseVector || 'Unknown'}
+- Recent Account Changes: ${ceRecentAcctChanges || 'Unknown'}
+- Device / Location: ${ceDeviceNew || 'Unknown'}
+- Prior Claims: ${cePriorClaims || 'Unknown'}
+- KYC Level: ${ceKycLevel || 'Unknown'}
+- Jurisdiction: ${ceCountry === 'us' ? 'United States (FinCEN/BSA)' : ceCountry === 'ca' ? 'Canada (FINTRAC/PCMLTFA)' : 'US + Canada (FinCEN + FINTRAC)'}
+- SAR/STR Status: ${ceSarRequired ? '⚠ THRESHOLD MET — filing obligation triggered' : 'Below automatic threshold — assess for suspicion-based obligation'}
+
+CUSTOMER STATEMENT:
+${ceComplaint}
+
+Generate a specific, actionable operational plan for this exact incident. Every step should be concrete and executable, not generic.
+
+Return ONLY valid JSON, no markdown:
+{
+  "immediate_actions": [
+    "Specific action within the next 60 minutes — name the tool, system, or person (e.g. 'Freeze account in Admin > Account Management > [account ID] > Suspend')",
+    "..."
+  ],
+  "investigation_steps": [
+    "Step within 24-48 hours — specific system queries, data pulls, or contacts (e.g. 'Pull login logs for past 30 days from Auth service — look for IP changes and 2FA bypass events')",
+    "..."
+  ],
+  "evidence_required": {
+    "internal": ["Pull from exchange systems — login history, 2FA audit log, API key activity, withdrawal logs, device fingerprint", "..."],
+    "external": ["Collect from customer or third parties — signed affidavit, police report, SIM swap confirmation from carrier", "..."],
+    "blockchain": ["On-chain evidence — trace destination address on Etherscan/Blockchain.com, OFAC screen receiving address, cluster analysis if available", "..."]
+  },
+  "sar_required": true | false,
+  "sar_note": "SAR/STR filing note — which jurisdiction, deadline, what triggers it, what to include. Empty string if not required.",
+  "lea_referral_recommended": true | false,
+  "lea_note": "Which agency (FBI IC3 / RCMP CAFC / both), what to include, urgency level. Empty string if not applicable.",
+  "exchange_contact_required": true | false,
+  "exchange_note": "Contact method for receiving exchange compliance (TRUST network / compliance@exchange / freeze request), urgency, what to include in request. Empty string if not applicable.",
+  "recovery_outlook": "HIGH" | "MODERATE" | "LOW" | "VERY_LOW",
+  "recovery_note": "2-3 sentences on recovery probability, what drives it, and what the customer should be told about the likelihood of fund recovery.",
+  "customer_letter": {
+    "subject": "Re: Your Recent Account Security Incident",
+    "body": "Professional, empathetic letter to the customer. 3-4 paragraphs. Do not admit liability. Explain what the exchange is doing, what the customer should do next, and expected timeline. Match tone to incident type — fraud victims need empathy; suspected FPF or consumer disputes need neutral professional tone."
+  }
+}`
+
+    try {
+      const response = await fetch('/api/triage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 2000, messages: [{ role: 'user', content: prompt }] }),
+      })
+      if (!response.ok) throw new Error(`API error: ${response.status}`)
+      const data = await response.json()
+      const text = data.content.filter(b => b.type === 'text').map(b => b.text).join('').replace(/```json|```/g, '').trim()
+      setCeActionPlan(JSON.parse(text))
+    } catch (e) {
+      setCeActionPlanError(`Action plan failed: ${e.message}`)
+    } finally {
+      setCeActionPlanLoading(false)
     }
   }
 
@@ -894,6 +990,22 @@ Return ONLY valid JSON, no markdown:
                     className="input-field"
                     style={{ resize: 'vertical' }}
                   />
+                </div>
+              </div>
+
+              {/* SAR deadline date (optional — for countdown in result) */}
+              <div>
+                <label className="input-label">
+                  Date Incident Reported <span className="mono-font text-[10px] text-stone-400 normal-case tracking-normal">(optional — enables SAR deadline countdown)</span>
+                </label>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <input type="date" value={ceSarDeadlineDate} onChange={e => setCeSarDeadlineDate(e.target.value)}
+                    className="input-field mono-font" style={{ fontSize: '13px', maxWidth: '200px' }} />
+                  {ceSarDeadline && (
+                    <div className={`mono-font text-xs px-2 py-1 ${ceSarDaysLeft !== null && ceSarDaysLeft <= 7 ? 'bg-red-900 text-red-50' : ceSarDaysLeft !== null && ceSarDaysLeft <= 14 ? 'bg-amber-800 text-amber-50' : 'bg-stone-800 text-stone-100'}`}>
+                      SAR deadline: {ceSarDeadline} · {ceSarDaysLeft !== null ? `${ceSarDaysLeft}d remaining` : ''}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1486,7 +1598,226 @@ Return ONLY valid JSON, no markdown:
                   }
                 </button>
 
-                {/* Send to Dispute Desk — always available after any classification */}
+                {/* ── CE: SAR countdown banner ── */}
+                {isCE && ceSarRequired && ceSarDeadline && (
+                  <div className={`flex items-center gap-3 px-3 py-2.5 mono-font text-xs ${ceSarDaysLeft !== null && ceSarDaysLeft <= 7 ? 'bg-red-900 text-red-50' : ceSarDaysLeft !== null && ceSarDaysLeft <= 14 ? 'bg-amber-800 text-amber-50' : 'bg-stone-800 text-stone-100'}`}>
+                    <span>⚠ SAR/STR DEADLINE:</span>
+                    <span className="font-bold">{ceSarDeadline}</span>
+                    {ceSarDaysLeft !== null && (
+                      <span>{ceSarDaysLeft > 0 ? `${ceSarDaysLeft} DAYS REMAINING` : ceSarDaysLeft === 0 ? 'DUE TODAY' : `${Math.abs(ceSarDaysLeft)} DAYS OVERDUE`}</span>
+                    )}
+                  </div>
+                )}
+
+                {/* ── CE: Generate full action plan ── */}
+                {isCE && !ceActionPlan && !ceActionPlanLoading && (
+                  <button
+                    onClick={generateCEActionPlan}
+                    className="w-full flex items-center justify-center gap-2 py-4 bg-stone-900 text-stone-50 mono-font text-xs tracking-widest hover:bg-stone-800 transition-all group"
+                  >
+                    <Shield className="w-4 h-4" />
+                    <span>GENERATE FULL ACTION PLAN</span>
+                    <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+                  </button>
+                )}
+                {isCE && ceActionPlanLoading && (
+                  <div className="border border-stone-300 p-8 text-center" style={{ background: '#FAF7F1' }}>
+                    <Loader2 className="w-6 h-6 text-stone-600 mx-auto mb-2 animate-spin" />
+                    <p className="display-font text-stone-600 italic text-sm">Building operational action plan…</p>
+                  </div>
+                )}
+                {isCE && ceActionPlanError && (
+                  <div className="border border-red-700 bg-red-50 p-4 flex gap-3 items-start">
+                    <AlertCircle className="w-4 h-4 text-red-700 shrink-0 mt-0.5" />
+                    <div className="display-font text-sm text-red-900">{ceActionPlanError}</div>
+                  </div>
+                )}
+
+                {/* ── CE: Action plan output ── */}
+                {isCE && ceActionPlan && (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div className="mono-font text-xs tracking-widest text-stone-500">FULL ACTION PLAN</div>
+                      <button onClick={() => {
+                        const t = [
+                          `CE ACTION PLAN — ${result.classification?.replace(/_/g,' ')}`,
+                          `Recovery Outlook: ${ceActionPlan.recovery_outlook}`,
+                          '',
+                          'IMMEDIATE ACTIONS:',
+                          ...(ceActionPlan.immediate_actions||[]).map((a,i) => `${i+1}. ${a}`),
+                          '',
+                          'INVESTIGATION STEPS:',
+                          ...(ceActionPlan.investigation_steps||[]).map((a,i) => `${i+1}. ${a}`),
+                          '',
+                          'EVIDENCE — INTERNAL:',
+                          ...(ceActionPlan.evidence_required?.internal||[]).map(e => `• ${e}`),
+                          '',
+                          'EVIDENCE — EXTERNAL:',
+                          ...(ceActionPlan.evidence_required?.external||[]).map(e => `• ${e}`),
+                          '',
+                          'EVIDENCE — BLOCKCHAIN:',
+                          ...(ceActionPlan.evidence_required?.blockchain||[]).map(e => `• ${e}`),
+                          ceActionPlan.sar_required ? '\nSAR/STR: ' + ceActionPlan.sar_note : '',
+                          ceActionPlan.lea_referral_recommended ? '\nLEA REFERRAL: ' + ceActionPlan.lea_note : '',
+                          ceActionPlan.exchange_contact_required ? '\nEXCHANGE CONTACT: ' + ceActionPlan.exchange_note : '',
+                          '',
+                          'RECOVERY OUTLOOK: ' + ceActionPlan.recovery_outlook,
+                          ceActionPlan.recovery_note,
+                          '',
+                          'CUSTOMER LETTER\nSubject: ' + (ceActionPlan.customer_letter?.subject || ''),
+                          'Dear Customer,\n\n' + (ceActionPlan.customer_letter?.body || ''),
+                        ].filter(Boolean).join('\n')
+                        navigator.clipboard.writeText(t)
+                        setCeActionPlanCopied(true)
+                        setTimeout(() => setCeActionPlanCopied(false), 2000)
+                      }} className="mono-font text-xs flex items-center gap-1.5 text-stone-600 hover:text-stone-900 transition-colors">
+                        {ceActionPlanCopied ? <><Check className="w-3 h-3" /> COPIED</> : <><Copy className="w-3 h-3" /> COPY ALL</>}
+                      </button>
+                    </div>
+
+                    {/* Immediate actions */}
+                    <div className="border-l-4 border-red-700 bg-red-50 p-5">
+                      <div className="mono-font text-xs tracking-widest text-red-900 mb-3">IMMEDIATE ACTIONS — DO NOW</div>
+                      <div className="space-y-2">
+                        {ceActionPlan.immediate_actions?.map((a, i) => (
+                          <div key={i} className="display-font text-stone-900 text-[14px] flex gap-2 items-start leading-snug">
+                            <span className="mono-font text-[11px] text-red-700 shrink-0 mt-0.5 font-bold">{i+1}.</span>
+                            <span>{a}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Investigation steps */}
+                    <div className="border border-stone-300 p-5" style={{ background: '#FAF7F1' }}>
+                      <div className="mono-font text-xs tracking-widest text-stone-600 mb-3">INVESTIGATION STEPS — 24–48 HOURS</div>
+                      <div className="space-y-2">
+                        {ceActionPlan.investigation_steps?.map((s, i) => (
+                          <div key={i} className="display-font text-stone-800 text-[14px] flex gap-2 items-start leading-snug">
+                            <span className="mono-font text-[11px] text-stone-500 shrink-0 mt-0.5">{i+1}.</span>
+                            <span>{s}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Evidence package */}
+                    <div>
+                      <div className="mono-font text-xs tracking-widest text-stone-500 mb-3">EVIDENCE PACKAGE</div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        {[
+                          { key: 'internal',   label: 'INTERNAL — YOUR SYSTEMS',        color: 'text-stone-900' },
+                          { key: 'external',   label: 'EXTERNAL — CUSTOMER / THIRD PARTIES', color: 'text-amber-900' },
+                          { key: 'blockchain', label: 'BLOCKCHAIN — ON-CHAIN',           color: 'text-purple-900' },
+                        ].map(({ key, label, color }) => (
+                          <div key={key} className="border border-stone-200 p-4" style={{ background: '#FAF7F1' }}>
+                            <div className="mono-font text-[10px] tracking-widest text-stone-400 mb-3">{label}</div>
+                            <div className="space-y-2">
+                              {(ceActionPlan.evidence_required?.[key] || []).map((item, i) => (
+                                <div key={i} className={`display-font text-[13px] flex gap-2 items-start leading-snug ${color}`}>
+                                  <span className="shrink-0 mt-0.5 text-stone-400">→</span>
+                                  <span>{item}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* SAR/STR block */}
+                    {ceActionPlan.sar_required && (
+                      <div className="border-l-4 border-amber-700 bg-amber-50 p-5">
+                        <div className="mono-font text-xs tracking-widest text-amber-900 mb-2">⚠ SAR / STR FILING REQUIRED</div>
+                        <p className="display-font text-stone-900 text-[14px] leading-relaxed">{ceActionPlan.sar_note}</p>
+                        {ceSarDeadline && (
+                          <div className={`mt-3 mono-font text-xs px-3 py-1.5 inline-block ${ceSarDaysLeft !== null && ceSarDaysLeft <= 7 ? 'bg-red-900 text-red-50' : 'bg-stone-800 text-stone-100'}`}>
+                            DEADLINE: {ceSarDeadline}{ceSarDaysLeft !== null ? ` · ${ceSarDaysLeft} days remaining` : ''}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* LEA referral */}
+                    {ceActionPlan.lea_referral_recommended && (
+                      <div className="border border-stone-900 p-5" style={{ background: '#1A1814' }}>
+                        <div className="mono-font text-xs tracking-widest text-stone-400 mb-2">LAW ENFORCEMENT REFERRAL</div>
+                        <p className="display-font text-stone-100 text-[14px] leading-relaxed">{ceActionPlan.lea_note}</p>
+                      </div>
+                    )}
+
+                    {/* Exchange contact */}
+                    {ceActionPlan.exchange_contact_required && (
+                      <div className="border border-stone-400 p-5" style={{ background: '#FAF7F1' }}>
+                        <div className="mono-font text-xs tracking-widest text-stone-500 mb-2">RECEIVING EXCHANGE — CONTACT NOW</div>
+                        <p className="display-font text-stone-800 text-[14px] leading-relaxed">{ceActionPlan.exchange_note}</p>
+                      </div>
+                    )}
+
+                    {/* Recovery outlook */}
+                    {(() => {
+                      const ol = ceActionPlan.recovery_outlook
+                      const olStyle = ol === 'HIGH' ? { bg: '#064e3b', text: '#6EE7B7' } :
+                                      ol === 'MODERATE' ? { bg: '#78350f', text: '#FDE68A' } :
+                                      ol === 'LOW' ? { bg: '#7f1d1d', text: '#FCA5A5' } :
+                                      { bg: '#1c1917', text: '#A8A29E' }
+                      return (
+                        <div className="p-5 border border-stone-200" style={{ background: '#FAF7F1' }}>
+                          <div className="mono-font text-xs tracking-widest text-stone-500 mb-2">RECOVERY OUTLOOK</div>
+                          <div className="flex items-center gap-3 mb-3">
+                            <span className="mono-font text-xs px-2 py-1" style={{ background: olStyle.bg, color: olStyle.text }}>{ol}</span>
+                            <span className="mono-font text-xs text-stone-400">
+                              {ol === 'HIGH' ? '60–80%' : ol === 'MODERATE' ? '35–60%' : ol === 'LOW' ? '15–35%' : '<15%'}
+                            </span>
+                          </div>
+                          <p className="display-font text-stone-700 text-[14px] leading-relaxed">{ceActionPlan.recovery_note}</p>
+                        </div>
+                      )
+                    })()}
+
+                    {/* Customer letter */}
+                    {ceActionPlan.customer_letter && (
+                      <div className="border border-stone-900">
+                        <div className="bg-stone-900 px-4 py-3 flex items-center justify-between">
+                          <div>
+                            <div className="mono-font text-xs tracking-widest text-stone-400 mb-0.5">CUSTOMER LETTER</div>
+                            <div className="display-font text-stone-100 font-semibold text-[15px]">{ceActionPlan.customer_letter.subject}</div>
+                          </div>
+                          <button onClick={() => {
+                            const full = `Subject: ${ceActionPlan.customer_letter.subject}
+
+Dear Customer,
+
+${ceActionPlan.customer_letter.body}
+
+Sincerely,
+Compliance & Fraud Operations Team`
+                            navigator.clipboard.writeText(full)
+                            setCeActionPlanCopied(true)
+                            setTimeout(() => setCeActionPlanCopied(false), 2000)
+                          }} className="mono-font text-xs flex items-center gap-1.5 text-stone-400 hover:text-stone-200 transition-colors">
+                            {ceActionPlanCopied ? <><Check className="w-3 h-3" /> COPIED</> : <><Copy className="w-3 h-3" /> COPY</>}
+                          </button>
+                        </div>
+                        <div className="bg-white p-5 space-y-3">
+                          <p className="display-font text-stone-500 text-sm italic">Dear Customer,</p>
+                          {ceActionPlan.customer_letter.body?.split('\n\n').map((para, i) => (
+                            <p key={i} className="display-font text-stone-900 text-[15px] leading-relaxed">{para}</p>
+                          ))}
+                          <p className="display-font text-stone-500 text-sm italic pt-2">Sincerely,<br />Compliance & Fraud Operations Team</p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Re-run action plan */}
+                    <button onClick={() => setCeActionPlan(null)} className="mono-font text-[10px] tracking-widest text-stone-400 hover:text-stone-700 transition-colors">
+                      ↺ REGENERATE ACTION PLAN
+                    </button>
+                  </div>
+                )}
+
+                {/* Send to Dispute Desk — FI mode only (CE analysts complete workflow here) */}
+                {!isCE && (
                 <div className="border" style={{ borderColor: result.proceed_to_dispute ? '#065F46' : '#D4CCBC' }}>
                   <button
                     onClick={handleProceedToDisputeDesk}
@@ -1514,6 +1845,7 @@ Return ONLY valid JSON, no markdown:
                     </div>
                   )}
                 </div>
+                )}
               </div>
             )}
           </div>
