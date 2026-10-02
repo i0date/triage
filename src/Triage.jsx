@@ -79,6 +79,11 @@ export default function Triage() {
   const detectedCrypto  = !isCrypto && isCryptoMerchantName(merchant)
   const showNetworkSel  = isCardBased || isCrypto
 
+  // Must be declared before fpfRiskScore useMemo (dep array evaluated immediately)
+  const daysSinceTransaction = transactionDate
+    ? Math.floor((Date.now() - new Date(transactionDate).getTime()) / 86400000)
+    : null
+
   // FPF (first-party fraud) risk score — 0 = definitely genuine, 100 = definitely FPF
   const fpfRiskScore = useMemo(() => {
     let s = 40 // neutral baseline
@@ -102,10 +107,6 @@ export default function Triage() {
     if (mccRisk?.includes('High'))                 s -= 10
     return Math.max(0, Math.min(100, Math.round(s)))
   }, [priorDisputes, accountAge, cardPossession, flaggedBy, daysSinceTransaction, accountChanges, deviceRecognized, merchantDisputeRate, vfmp, mccRisk])
-
-  const daysSinceTransaction = transactionDate
-    ? Math.floor((Date.now() - new Date(transactionDate).getTime()) / 86400000)
-    : null
 
   const regFramework =
     accountType === 'debit' || accountType === 'ach_eft' ? 'REG_E' :
