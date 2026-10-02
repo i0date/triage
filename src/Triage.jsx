@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react'
-import { Shield, AlertTriangle, MessageSquare, Loader2, ArrowRight, ExternalLink, AlertCircle, Send, Lock } from 'lucide-react'
+import React, { useState, useEffect, useMemo } from 'react'
+import { Shield, AlertTriangle, MessageSquare, Loader2, ArrowRight, ExternalLink, AlertCircle, Send, Lock, Copy, Check, Download, Bitcoin } from 'lucide-react'
 
 // ── Transaction types per account type ──────────────────────────────────────
 const TX_TYPES = {
@@ -8,7 +8,12 @@ const TX_TYPES = {
   p2p:     ['Zelle', 'Interac e-Transfer', 'P2P (Venmo / Cash App / PayPal)', 'Wire Transfer'],
   ach_eft: ['ACH / EFT Transfer', 'Wire Transfer', 'Bill Payment (ACH)'],
   bnpl:    ['BNPL Purchase', 'Recurring / Subscription'],
+  crypto:  ['Card-funded exchange purchase', 'Bank transfer to exchange', 'Wallet-to-wallet transfer', 'NFT marketplace purchase', 'Crypto investment platform deposit'],
 }
+
+// ── Known crypto exchanges / platforms for auto-detection ───────────────────
+const CRYPTO_MERCHANTS = ['coinbase', 'binance', 'kraken', 'bitbuy', 'newton', 'ndax', 'shakepay', 'gemini', 'crypto.com', 'bybit', 'kucoin', 'bitfinex', 'opensea', 'rarible', 'blur', 'magic eden']
+const isCryptoMerchantName = (name) => name && CRYPTO_MERCHANTS.some(k => name.toLowerCase().includes(k))
 
 export default function Triage() {
 
@@ -38,9 +43,19 @@ export default function Triage() {
   const [merchantDisputeRate, setMerchantDisputeRate]     = useState('')
   const [mccRisk, setMccRisk]                             = useState('')
 
+  // ── Network (card-based + crypto) ───────────────────────────────────────────
+  const [network, setNetwork] = useState('')
+
+  // ── Crypto-specific signals ──────────────────────────────────────────────────
+  const [cryptoScenario, setCryptoScenario]       = useState('')
+  const [exchangeRegulated, setExchangeRegulated] = useState('')
+  const [walletCustody, setWalletCustody]         = useState('')
+  const [contactedExchange, setContactedExchange] = useState('')
+
   const [loading, setLoading] = useState(false)
   const [result, setResult]   = useState(null)
   const [error, setError]     = useState(null)
+  const [exportCopied, setExportCopied] = useState(false)
 
   // ── 05 Outcome tracking ─────────────────────────────────────────────────────
   const [outcomes, setOutcomes] = useState(() => {
@@ -59,7 +74,34 @@ export default function Triage() {
   }, [accountType])
 
   // ── Computed values ──────────────────────────────────────────────────────────
-  const isCardBased = accountType === 'debit' || accountType === 'credit'
+  const isCardBased     = accountType === 'debit' || accountType === 'credit'
+  const isCrypto        = accountType === 'crypto'
+  const detectedCrypto  = !isCrypto && isCryptoMerchantName(merchant)
+  const showNetworkSel  = isCardBased || isCrypto
+
+  // FPF (first-party fraud) risk score — 0 = definitely genuine, 100 = definitely FPF
+  const fpfRiskScore = useMemo(() => {
+    let s = 40 // neutral baseline
+    if (priorDisputes === '3–5')        s += 15
+    if (priorDisputes === '5+')         s += 25
+    if (priorDisputes === '1–2')        s +=  5
+    if (priorDisputes === 'None')       s -= 20
+    if (accountAge === 'Under 6 months') s += 15
+    if (accountAge === '6–12 months')    s +=  5
+    if (accountAge === '3+ years')       s -= 15
+    if (cardPossession === 'Yes — card in hand')      s += 12
+    if (cardPossession === 'No — card lost or stolen') s -= 15
+    if (flaggedBy === 'System alert (fraud detection)')  s -= 20
+    if (flaggedBy?.includes('Customer-reported'))        s +=  5
+    if (daysSinceTransaction !== null && daysSinceTransaction > 60) s += 15
+    if (daysSinceTransaction !== null && daysSinceTransaction <= 7) s -= 10
+    if (accountChanges?.includes('Yes')) s += 8
+    if (deviceRecognized?.includes('New')) s -= 10
+    if (merchantDisputeRate === 'High (over 2%)') s -= 15
+    if (vfmp === 'Yes — VFMP listed')              s -= 15
+    if (mccRisk?.includes('High'))                 s -= 10
+    return Math.max(0, Math.min(100, Math.round(s)))
+  }, [priorDisputes, accountAge, cardPossession, flaggedBy, daysSinceTransaction, accountChanges, deviceRecognized, merchantDisputeRate, vfmp, mccRisk])
 
   const daysSinceTransaction = transactionDate
     ? Math.floor((Date.now() - new Date(transactionDate).getTime()) / 86400000)
@@ -69,23 +111,27 @@ export default function Triage() {
     accountType === 'debit' || accountType === 'ach_eft' ? 'REG_E' :
     accountType === 'credit'                             ? 'REG_Z' :
     accountType === 'p2p'                                ? 'PROVIDER' :
-    accountType === 'bnpl'                               ? 'REG_Z_PROVIDER' : null
+    accountType === 'bnpl'                               ? 'REG_Z_PROVIDER' :
+    accountType === 'crypto'                             ? 'CRYPTO' : null
 
   const regLabel =
     regFramework === 'REG_E'          ? 'REG E'            :
     regFramework === 'REG_Z'          ? 'REG Z'            :
     regFramework === 'PROVIDER'       ? 'PROVIDER-HANDLED' :
-    regFramework === 'REG_Z_PROVIDER' ? 'REG Z / PROVIDER' : null
+    regFramework === 'REG_Z_PROVIDER' ? 'REG Z / PROVIDER' :
+    regFramework === 'CRYPTO'         ? 'CRYPTO / DIGITAL ASSET' : null
 
   const regSubtext =
     regFramework === 'REG_E'          ? 'Debit / EFT — Electronic Fund Transfer Act applies' :
     regFramework === 'REG_Z'          ? 'Credit — Truth in Lending Act / network chargeback rules apply' :
     regFramework === 'PROVIDER'       ? 'No network chargeback path — contact recipient FI or network' :
-    regFramework === 'REG_Z_PROVIDER' ? 'BNPL — dispute through provider, not card network' : null
+    regFramework === 'REG_Z_PROVIDER' ? 'BNPL — dispute through provider, not card network' :
+    regFramework === 'CRYPTO'         ? 'No blanket network protection — coverage depends on payment method used and exchange policies' : null
 
   const regColor =
     regFramework === 'REG_E'    ? { bg: '#1E3A8A', text: '#BFDBFE' } :
     regFramework === 'REG_Z'    ? { bg: '#4C1D95', text: '#DDD6FE' } :
+    regFramework === 'CRYPTO'   ? { bg: '#064E3B', text: '#6EE7B7' } :
                                   { bg: '#374151', text: '#D1D5DB' }
 
   const provisionalCreditApplies = regFramework === 'REG_E' && result &&
@@ -141,7 +187,7 @@ export default function Triage() {
     setError(null)
     setResult(null)
 
-    const accountTypeLabel = { debit: 'Debit Card', credit: 'Credit Card', p2p: 'P2P / e-Transfer', ach_eft: 'ACH / EFT', bnpl: 'BNPL (Buy Now Pay Later)' }[accountType] ?? 'Not specified'
+    const accountTypeLabel = { debit: 'Debit Card', credit: 'Credit Card', p2p: 'P2P / e-Transfer', ach_eft: 'ACH / EFT', bnpl: 'BNPL (Buy Now Pay Later)', crypto: 'Crypto / Digital Asset' }[accountType] ?? 'Not specified'
     const daysNote = daysSinceTransaction !== null ? `${daysSinceTransaction} days ago (transaction date: ${transactionDate})` : 'Unknown'
 
     const prompt = `You are an expert fraud and disputes triage analyst at a financial institution. Classify this incoming dispute claim. You serve credit unions, banks, fintechs, and lenders.
@@ -155,10 +201,16 @@ FOUR VERDICT DEFINITIONS:
 ACCOUNT & TRANSACTION:
 - Account Type: ${accountTypeLabel}
 - Regulatory Framework: ${regFramework ?? 'Unknown'}
+- Payment Network: ${network || 'Not specified'}
 - Merchant / Recipient: ${merchant || 'Not provided'}
 - Amount: ${amount ? `${amount} ${currency}` : 'Not provided'}
 - Transaction occurred: ${daysNote}
-- Transaction Type: ${transactionType || 'Not provided'}
+- Transaction Type: ${transactionType || 'Not provided'}${(isCrypto || detectedCrypto) ? `
+- Crypto / Digital Asset detected: YES${detectedCrypto && !isCrypto ? ' (auto-detected from merchant name)' : ''}
+- Crypto Fraud Scenario: ${cryptoScenario || 'Not specified'}
+- Exchange Regulated: ${exchangeRegulated || 'Unknown'}
+- Wallet Custody: ${walletCustody || 'Unknown'}
+- Customer Contacted Exchange First: ${contactedExchange || 'Unknown'}` : ''}
 
 CLAIM:
 - How flagged: ${flaggedBy || 'Not provided'}
@@ -179,18 +231,26 @@ ${isCardBased ? `MERCHANT RISK SIGNALS:
 - MCC risk tier: ${mccRisk || 'Unknown'}` : `MERCHANT SIGNALS: N/A — non-card payment rail. Routing should follow ${regFramework === 'PROVIDER' ? 'recipient FI contact / network recall' : regFramework === 'NACHA' ? 'NACHA return code' : 'provider dispute process'}.`}
 
 CLASSIFICATION GUIDANCE:
-TRUE_FRAUD: 0 prior disputes, account 3+ years, reported within 30 days, VFMP merchant (card), system alert, card lost/stolen, no suspicious account changes, known device.
-FIRST_PARTY_FRAUD: 3+ prior disputes, account under 6 months, filed 60+ days after transaction, low-risk merchant, card in possession, customer-reported only, inconsistent claim.
-CONSUMER_DISPUTE: Specific grievance stated, 1–2 prior disputes, plausible for merchant category, customer attempted merchant contact.
-AUTHORIZED_PUSH_PAYMENT: Customer explicitly authorized the transfer but describes being deceived — romance, fake emergency, impersonation, investment. Rail is P2P/e-Transfer/Zelle/wire.
+TRUE_FRAUD: 0 prior disputes, account 3+ years, reported within 30 days, VFMP merchant (card), system alert, card lost/stolen, no suspicious account changes, known device. For crypto: wallet hack, exchange breach, SIM-swap enabling unauthorized access — no cardholder initiation.
+FIRST_PARTY_FRAUD: 3+ prior disputes, account under 6 months, filed 60+ days after transaction, low-risk merchant, card in possession, customer-reported only, inconsistent claim. Crypto FPF: customer claims non-receipt of crypto they actually received, or reverse-purchases a volatile asset after price drop.
+CONSUMER_DISPUTE: Specific grievance stated, 1–2 prior disputes, plausible for merchant category, customer attempted merchant contact. Crypto dispute: exchange fees charged incorrectly, NFT not delivered, platform failed to execute trade.
+AUTHORIZED_PUSH_PAYMENT: Customer explicitly authorized the transfer but describes being deceived — romance, fake emergency, impersonation, investment. Applies to crypto: pig butchering / investment scam where customer voluntarily sent crypto to fraudster. Also card-funded exchange purchases where the exchange itself is fraudulent.
 
-ATO DETECTION: If recent account changes (login/password/contact) AND new/unrecognized device/location AND fraudulent activity are all present — set ato_suspected true.
+CRYPTO SCENARIO GUIDANCE:
+- "Card used to buy crypto (authorized scam)": Likely AUTHORIZED_PUSH_PAYMENT — card chargeback possible if exchange cooperates; limited network protection. Note: Visa/MC may allow chargeback on the card leg.
+- "Pig butchering / investment scam": AUTHORIZED_PUSH_PAYMENT — customer induced to deposit incrementally; recovery very limited without law enforcement.
+- "Wallet / exchange hack (unauthorized)": TRUE_FRAUD — unrecognized access; pursue exchange security team + law enforcement referral.
+- "NFT / digital asset fraud": TRUE_FRAUD or CONSUMER_DISPUTE — depends on whether customer authorized purchase on legitimate platform or was deceived about asset authenticity.
+
+ATO DETECTION: If recent account changes (login/password/contact) AND new/unrecognized device/location AND fraudulent activity are all present — set ato_suspected true. For crypto: SIM-swap plus exchange account takeover is a strong ATO signal.
 
 ROUTING LOGIC:
 - Debit or credit card → card network chargeback: "CARD_CHARGEBACK"
 - ACH / EFT → NACHA return code: "NACHA_RETURN"
 - P2P / Zelle / e-Transfer / wire (fraud or APP) → recipient FI contact + network recall: "RECIPIENT_FI"
 - BNPL → provider dispute: "PROVIDER_DISPUTE"
+- Crypto (card-funded exchange) → card chargeback on the card leg + contact exchange: "CARD_CHARGEBACK"
+- Crypto (direct transfer / wallet) → exchange security team + law enforcement referral: "RECIPIENT_FI"
 - FIRST_PARTY_FRAUD (any rail) → do not file: "FLAG_INVESTIGATION"
 - CONSUMER_DISPUTE → goodwill/merchant outreach first: "GOODWILL_FIRST"
 
@@ -240,8 +300,11 @@ Return ONLY valid JSON, no markdown:
         date: new Date().toISOString(),
         merchant: merchant || '—',
         amount: amount ? `${amount} ${currency}` : '—',
+        accountType,
+        network: network || '',
         verdict: parsed.classification,
         confidence: parsed.confidence,
+        routing: parsed.routing,
         outcome: 'pending',
       }, ...prev].slice(0, 100))
     } catch (e) {
@@ -253,6 +316,75 @@ Return ONLY valid JSON, no markdown:
 
   const markOutcome = (id, val) =>
     setOutcomes(prev => prev.map(o => o.id === id ? { ...o, outcome: val } : o))
+
+  // ── Export report to clipboard ──────────────────────────────────────────────
+  const exportReport = () => {
+    if (!result) return
+    const caseId = outcomes[0]?.id ?? '—'
+    const lines = [
+      `TRIAGE REPORT — ${caseId}`,
+      `Generated: ${new Date().toLocaleString()}`,
+      ``,
+      `VERDICT: ${cfg?.label ?? result.classification}`,
+      `Confidence: ${result.confidence}`,
+      `Headline: ${result.headline}`,
+      ``,
+      `TRANSACTION`,
+      `  Merchant: ${merchant || '—'}`,
+      `  Amount: ${amount ? `${amount} ${currency}` : '—'}`,
+      `  Date: ${transactionDate || '—'}${daysSinceTransaction !== null ? ` (${daysSinceTransaction} days ago)` : ''}`,
+      `  Type: ${transactionType || '—'}`,
+      `  Account Type: ${accountType || '—'}`,
+      network ? `  Network: ${network}` : '',
+      `  Regulatory Framework: ${regLabel ?? '—'}`,
+      ``,
+      `ROUTING`,
+      `  Recommendation: ${result.routing_label}`,
+      `  Next Steps: ${result.routing_detail}`,
+      ``,
+      `KEY SIGNALS`,
+      ...(result.signals?.map(s => `  → ${s}`) ?? []),
+      ``,
+      result.ato_suspected ? [`ATO SUSPECTED: ${result.ato_note}`, ``].join('\n') : '',
+      provisionalCreditApplies ? `PROVISIONAL CREDIT: Reg E applies — 10 BD deadline.\n` : '',
+      result.risk_notes ? `WATCH FOR: ${result.risk_notes}\n` : '',
+      `FPF RISK SCORE: ${fpfRiskScore}/100`,
+      isCrypto && cryptoScenario  ? `Crypto Scenario: ${cryptoScenario}` : '',
+      isCrypto && exchangeRegulated ? `Exchange Regulated: ${exchangeRegulated}` : '',
+      isCrypto && walletCustody    ? `Wallet Custody: ${walletCustody}` : '',
+      isCrypto && contactedExchange ? `Contacted Exchange: ${contactedExchange}` : '',
+    ].filter(l => l !== '').join('\n')
+
+    navigator.clipboard.writeText(lines).then(() => {
+      setExportCopied(true)
+      setTimeout(() => setExportCopied(false), 2000)
+    })
+  }
+
+  // ── Handoff to Dispute Desk via localStorage ─────────────────────────────────
+  const handleProceedToDisputeDesk = () => {
+    if (!result) return
+    const handoff = {
+      caseId: outcomes[0]?.id ?? `T-${Date.now().toString(36).toUpperCase().slice(-5)}`,
+      merchant,
+      amount,
+      currency,
+      transactionDate,
+      network,
+      accountType,
+      transactionType,
+      cryptoScenario: isCrypto || detectedCrypto ? cryptoScenario : '',
+      classification: result.classification,
+      confidence: result.confidence,
+      headline: result.headline,
+      routing: result.routing,
+      routingLabel: result.routing_label,
+      complaint: customerReason,
+      timestamp: new Date().toISOString(),
+    }
+    try { localStorage.setItem('dd_triage_handoff', JSON.stringify(handoff)) } catch {}
+    window.open('https://dispute-desk-tau.vercel.app', '_blank', 'noopener,noreferrer')
+  }
 
   // ─── Render ───────────────────────────────────────────────────────────────────
 
@@ -339,6 +471,7 @@ Return ONLY valid JSON, no markdown:
                   <option value="p2p">P2P / e-Transfer</option>
                   <option value="ach_eft">ACH / EFT</option>
                   <option value="bnpl">BNPL (Buy Now Pay Later)</option>
+                  <option value="crypto">Crypto / Digital Asset</option>
                 </select>
               </div>
 
@@ -349,6 +482,45 @@ Return ONLY valid JSON, no markdown:
                     {regLabel}
                   </span>
                   <span className="mono-font text-xs text-stone-400 leading-relaxed">{regSubtext}</span>
+                </div>
+              )}
+
+              {/* Network selector — card-based and crypto */}
+              {showNetworkSel && (
+                <div>
+                  <label className="input-label">Payment Network</label>
+                  <select value={network} onChange={e => setNetwork(e.target.value)} className="input-field" style={{ fontSize: '14px' }}>
+                    <option value="">Select network…</option>
+                    {isCrypto ? (
+                      <>
+                        <option>Bitcoin (BTC)</option>
+                        <option>Ethereum (ETH)</option>
+                        <option>Solana (SOL)</option>
+                        <option>Polygon (MATIC)</option>
+                        <option>USDT / USDC (Stablecoin)</option>
+                        <option>Other / Unknown chain</option>
+                      </>
+                    ) : (
+                      <>
+                        <option>Visa</option>
+                        <option>Mastercard</option>
+                        <option>American Express</option>
+                        <option>Interac</option>
+                        <option>Other</option>
+                      </>
+                    )}
+                  </select>
+                </div>
+              )}
+
+              {/* Auto-detected crypto banner */}
+              {detectedCrypto && (
+                <div className="flex items-start gap-2 p-3" style={{ background: '#ECFDF5', border: '1px solid #6EE7B7' }}>
+                  <Bitcoin className="w-4 h-4 shrink-0 mt-0.5" style={{ color: '#065F46' }} />
+                  <div>
+                    <span className="mono-font text-xs tracking-widest" style={{ color: '#064E3B' }}>CRYPTO MERCHANT DETECTED — </span>
+                    <span className="mono-font text-xs" style={{ color: '#065F46' }}>{merchant} is a known exchange or digital asset platform. Switch account type to Crypto to unlock all crypto signals.</span>
+                  </div>
                 </div>
               )}
 
@@ -560,6 +732,53 @@ Return ONLY valid JSON, no markdown:
               </div>
             )}
 
+            {/* Crypto signals — shown when account type is crypto or merchant auto-detected as crypto */}
+            {(isCrypto || detectedCrypto) && (
+              <div className="mt-5">
+                <div className="sub-label ml-0 flex items-center gap-2">
+                  <Bitcoin className="w-3 h-3" style={{ color: '#065F46' }} />
+                  <span>Crypto / Digital Asset Signals</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="sm:col-span-2">
+                    <label className="input-label">Crypto Fraud Scenario</label>
+                    <select value={cryptoScenario} onChange={e => setCryptoScenario(e.target.value)} className="input-field" style={{ fontSize: '14px' }}>
+                      <option value="">Select scenario…</option>
+                      <option value="Card used to buy crypto (authorized scam)">Card used to buy crypto (authorized scam)</option>
+                      <option value="Pig butchering / investment scam">Pig butchering / investment scam</option>
+                      <option value="Wallet / exchange hack (unauthorized access)">Wallet / exchange hack (unauthorized access)</option>
+                      <option value="NFT / digital asset fraud">NFT / digital asset fraud</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="input-label">Exchange Regulated?</label>
+                    <select value={exchangeRegulated} onChange={e => setExchangeRegulated(e.target.value)} className="input-field" style={{ fontSize: '14px' }}>
+                      <option value="">Unknown</option>
+                      <option value="Yes — registered / licensed exchange">Yes — licensed exchange</option>
+                      <option value="No — unregulated or offshore">No — unregulated / offshore</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="input-label">Wallet Custody</label>
+                    <select value={walletCustody} onChange={e => setWalletCustody(e.target.value)} className="input-field" style={{ fontSize: '14px' }}>
+                      <option value="">Unknown</option>
+                      <option value="Custodial (exchange holds keys)">Custodial (exchange holds keys)</option>
+                      <option value="Self-custody (customer holds keys)">Self-custody (customer holds keys)</option>
+                    </select>
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="input-label">Customer Contacted Exchange?</label>
+                    <select value={contactedExchange} onChange={e => setContactedExchange(e.target.value)} className="input-field" style={{ fontSize: '14px' }}>
+                      <option value="">Unknown</option>
+                      <option value="Yes — exchange contacted, case open">Yes — case open with exchange</option>
+                      <option value="Yes — exchange declined to help">Yes — exchange declined</option>
+                      <option value="No — customer came to FI first">No — came to FI first</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* CTA button */}
             <div className="mt-8">
               <button
@@ -716,26 +935,67 @@ Return ONLY valid JSON, no markdown:
                   </div>
                 )}
 
-                {/* Proceed to Dispute Desk CTA */}
-                {result.proceed_to_dispute && (
-                  <a
-                    href="https://dispute-desk-tau.vercel.app"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="w-full flex items-center justify-between p-5 transition-colors group"
-                    style={{ background: '#1A1814' }}
-                    onMouseEnter={e => e.currentTarget.style.background = '#2C2822'}
-                    onMouseLeave={e => e.currentTarget.style.background = '#1A1814'}
+                {/* FPF Risk Score meter */}
+                {(() => {
+                  const fpfColor = fpfRiskScore >= 70 ? '#991B1B' : fpfRiskScore >= 45 ? '#92400E' : '#065F46'
+                  const fpfBg    = fpfRiskScore >= 70 ? '#FEE2E2' : fpfRiskScore >= 45 ? '#FEF3C7' : '#ECFDF5'
+                  const fpfLabel = fpfRiskScore >= 70 ? 'HIGH — Investigate further' : fpfRiskScore >= 45 ? 'MODERATE — Review carefully' : 'LOW — Claim appears genuine'
+                  return (
+                    <div className="border p-4" style={{ background: fpfBg, borderColor: fpfColor + '40' }}>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="mono-font text-xs tracking-widest" style={{ color: fpfColor }}>FIRST-PARTY FRAUD RISK</span>
+                        <span className="mono-font text-sm font-bold" style={{ color: fpfColor }}>{fpfRiskScore}/100</span>
+                      </div>
+                      <div className="w-full h-2 rounded-full mb-2" style={{ background: '#E7E5E4' }}>
+                        <div className="h-2 rounded-full transition-all duration-500" style={{ width: `${fpfRiskScore}%`, background: fpfColor }} />
+                      </div>
+                      <div className="mono-font text-xs" style={{ color: fpfColor }}>{fpfLabel}</div>
+                    </div>
+                  )
+                })()}
+
+                {/* Export report button */}
+                <button
+                  onClick={exportReport}
+                  className="w-full flex items-center justify-center gap-2 py-3 border transition-colors"
+                  style={{ borderColor: '#D4CCBC', background: '#FAF7F1' }}
+                  onMouseEnter={e => { e.currentTarget.style.background = '#F0EBE2' }}
+                  onMouseLeave={e => { e.currentTarget.style.background = '#FAF7F1' }}
+                >
+                  {exportCopied
+                    ? <><Check className="w-4 h-4 text-emerald-600" /><span className="mono-font text-xs tracking-widest text-emerald-600">COPIED TO CLIPBOARD</span></>
+                    : <><Copy className="w-4 h-4 text-stone-500" /><span className="mono-font text-xs tracking-widest text-stone-600">EXPORT TRIAGE REPORT</span></>
+                  }
+                </button>
+
+                {/* Send to Dispute Desk — always available after any classification */}
+                <div className="border" style={{ borderColor: result.proceed_to_dispute ? '#065F46' : '#D4CCBC' }}>
+                  <button
+                    onClick={handleProceedToDisputeDesk}
+                    className="w-full flex items-center justify-between p-5 transition-colors"
+                    style={{ background: result.proceed_to_dispute ? '#1A1814' : '#FAF7F1' }}
+                    onMouseEnter={e => e.currentTarget.style.background = result.proceed_to_dispute ? '#2C2822' : '#F0EBE2'}
+                    onMouseLeave={e => e.currentTarget.style.background = result.proceed_to_dispute ? '#1A1814' : '#FAF7F1'}
                   >
-                    <div>
-                      <div className="mono-font text-xs tracking-widest mb-1" style={{ color: '#6B5F4D' }}>NEXT STEP</div>
-                      <div className="display-font font-semibold text-lg" style={{ color: '#F5F1EA', letterSpacing: '-0.01em' }}>
-                        Proceed to Dispute Desk →
+                    <div className="text-left">
+                      <div className="mono-font text-xs tracking-widest mb-1" style={{ color: result.proceed_to_dispute ? '#6B5F4D' : '#A89B88' }}>
+                        {result.proceed_to_dispute ? 'RECOMMENDED NEXT STEP' : 'OPTIONAL — SEND TO DESK'}
+                      </div>
+                      <div className="display-font font-semibold text-lg" style={{ color: result.proceed_to_dispute ? '#F5F1EA' : '#1A1814', letterSpacing: '-0.01em' }}>
+                        Open in Dispute Desk →
+                      </div>
+                      <div className="mono-font text-xs mt-1" style={{ color: result.proceed_to_dispute ? '#6B5F4D' : '#A89B88' }}>
+                        Merchant, amount, date &amp; complaint pre-filled
                       </div>
                     </div>
-                    <ExternalLink className="w-5 h-5 shrink-0" style={{ color: '#6B5F4D' }} />
-                  </a>
-                )}
+                    <ExternalLink className="w-5 h-5 shrink-0" style={{ color: result.proceed_to_dispute ? '#6B5F4D' : '#D4CCBC' }} />
+                  </button>
+                  {!result.proceed_to_dispute && (
+                    <div className="px-5 pb-3 mono-font text-xs" style={{ color: '#A89B88' }}>
+                      Note: AI did not recommend filing — review signals before proceeding
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>
