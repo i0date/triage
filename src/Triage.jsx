@@ -57,6 +57,30 @@ export default function Triage() {
   const [error, setError]     = useState(null)
   const [exportCopied, setExportCopied] = useState(false)
 
+  // ── Platform mode: 'fi' = Financial Institution, 'ce' = Crypto Exchange ──────
+  const [platformMode, setPlatformMode] = useState('fi')
+
+  // ── Crypto Exchange (CE) mode state ─────────────────────────────────────────
+  const [ceAccountType, setCeAccountType]               = useState('')   // standard, business, api, otc
+  const [ceAsset, setCeAsset]                           = useState('')   // BTC, ETH, USDC, etc.
+  const [ceChain, setCeChain]                           = useState('')   // Bitcoin, Ethereum, Solana…
+  const [ceTxType, setCeTxType]                         = useState('')   // withdrawal, deposit, trade…
+  const [ceAmount, setCeAmount]                         = useState('')
+  const [ceCurrency, setCeCurrency]                     = useState('USD')
+  const [ceTxDate, setCeTxDate]                         = useState('')
+  const [ceDestinationType, setCeDestinationType]       = useState('')   // internal, external, other_exchange
+  const [ceDestinationAddress, setCeDestinationAddress] = useState('')
+  const [ceReceivingExchange, setCeReceivingExchange]   = useState('')
+  const [ceCompromiseVector, setCeCompromiseVector]     = useState('')   // sim_swap, phishing, api_key…
+  const [ceRecentAcctChanges, setCeRecentAcctChanges]   = useState('')
+  const [ceDeviceNew, setCeDeviceNew]                   = useState('')
+  const [cePriorClaims, setCePriorClaims]               = useState('')
+  const [ceKycLevel, setCeKycLevel]                     = useState('')
+  const [ceBlockchainTrace, setCeBlockchainTrace]       = useState('')
+  const [ceCountry, setCeCountry]                       = useState('both') // 'us' | 'ca' | 'both'
+  const [ceComplaint, setCeComplaint]                   = useState('')
+  const [ceFlaggedBy, setCeFlaggedBy]                   = useState('')
+
   // ── 05 Outcome tracking ─────────────────────────────────────────────────────
   const [outcomes, setOutcomes] = useState(() => {
     try { return JSON.parse(localStorage.getItem('triage_outcomes') || '[]') } catch { return [] }
@@ -134,6 +158,20 @@ export default function Triage() {
     regFramework === 'REG_Z'    ? { bg: '#4C1D95', text: '#DDD6FE' } :
     regFramework === 'CRYPTO'   ? { bg: '#064E3B', text: '#6EE7B7' } :
                                   { bg: '#374151', text: '#D1D5DB' }
+
+  // ── CE computed values ───────────────────────────────────────────────────────
+  const isCE           = platformMode === 'ce'
+  const ceDaysSince    = ceTxDate ? Math.floor((Date.now() - new Date(ceTxDate).getTime()) / 86400000) : null
+  const ceAmountNum    = parseFloat(ceAmount) || 0
+  const ceSarFlagUS    = ceAmountNum >= 5000  && (ceCountry === 'us'   || ceCountry === 'both') && ceCurrency === 'USD'
+  const ceStrFlagCA    = ceAmountNum >= 10000 && (ceCountry === 'ca'   || ceCountry === 'both') && ceCurrency === 'CAD'
+  const ceSarRequired  = ceSarFlagUS || ceStrFlagCA
+  const ceRegLabel     = ceCountry === 'us' ? 'FINCEN / FinCEN MSB' : ceCountry === 'ca' ? 'FINTRAC / PCMLTFA' : 'FinCEN (US) + FINTRAC (CA)'
+  const ceRegSubtext   = ceCountry === 'us'
+    ? 'FinCEN registration required; SAR if suspicious activity ≥ $5,000 USD'
+    : ceCountry === 'ca'
+    ? 'FINTRAC STR required for suspicious transactions; $10,000 CAD large cash threshold'
+    : 'Dual jurisdiction — FinCEN SAR ($5k USD) and FINTRAC STR ($10k CAD) obligations apply'
 
   const provisionalCreditApplies = regFramework === 'REG_E' && result &&
     (result.classification === 'TRUE_FRAUD' || result.classification === 'AUTHORIZED_PUSH_PAYMENT')
@@ -315,6 +353,125 @@ Return ONLY valid JSON, no markdown:
     }
   }
 
+  // ── Crypto Exchange classify ─────────────────────────────────────────────────
+  const classifyCE = async () => {
+    if (!ceComplaint.trim()) { setError("Customer's stated reason is required."); return }
+    setLoading(true); setError(null); setResult(null)
+
+    const daysNote = ceDaysSince !== null ? `${ceDaysSince} days ago (${ceTxDate})` : 'Unknown'
+    const sarNote  = ceSarRequired
+      ? `⚠ SAR/STR THRESHOLD MET — ${ceSarFlagUS ? `FinCEN SAR required ($${ceAmountNum.toLocaleString()} USD ≥ $5,000)` : ''}${ceSarFlagUS && ceStrFlagCA ? ' + ' : ''}${ceStrFlagCA ? `FINTRAC STR required ($${ceAmountNum.toLocaleString()} CAD ≥ $10,000)` : ''}`
+      : 'Below SAR/STR threshold'
+
+    const prompt = `You are a senior fraud analyst at a crypto exchange / digital asset platform (e.g. Coinbase, Binance, Kraken, Newton, Shakepay). You are triaging an incoming fraud or dispute claim. You operate under FinCEN (US) and/or FINTRAC (Canada) obligations as a Money Services Business.
+
+FOUR VERDICT DEFINITIONS:
+- TRUE_FRAUD: Unauthorized third-party access to the customer's exchange account — account takeover (ATO), SIM-swap, credential phishing, API key theft. Customer did NOT initiate or authorize the transaction(s).
+- FIRST_PARTY_FRAUD: Customer authorized the transactions themselves but is falsely claiming fraud — typically after a losing trade, price drop, or buyer's remorse on an NFT or asset. Friendly fraud / chargeback abuse via linked card.
+- CONSUMER_DISPUTE: Customer authorized the transaction but has a legitimate grievance — trade execution error, withdrawal delay, incorrect fee, locked account, asset not credited, or platform malfunction.
+- AUTHORIZED_PUSH_PAYMENT: Customer was socially engineered into sending crypto voluntarily — pig butchering / investment scam, romance scam, fake exchange impersonation, fake support agent, NFT marketplace fraud. Customer believed the transfer was legitimate.
+
+EXCHANGE ACCOUNT:
+- Account Type: ${ceAccountType || 'Not specified'} (exchange account tier)
+- KYC / Verification Level: ${ceKycLevel || 'Unknown'}
+- Prior Claims (12 months): ${cePriorClaims || 'Unknown'}
+- Flagged by: ${ceFlaggedBy || 'Not specified'}
+
+TRANSACTION:
+- Asset: ${ceAsset || 'Not specified'}
+- Blockchain / Network: ${ceChain || 'Not specified'}
+- Transaction Type: ${ceTxType || 'Not specified'}
+- Amount: ${ceAmount ? `${ceAmount} ${ceCurrency}` : 'Not specified'}
+- SAR/STR Status: ${sarNote}
+- Transaction occurred: ${daysNote}
+- Destination type: ${ceDestinationType || 'Unknown'}
+${ceDestinationAddress ? `- Destination address/exchange: ${ceDestinationAddress}` : ''}
+${ceReceivingExchange ? `- Receiving exchange (if known): ${ceReceivingExchange}` : ''}
+
+COMPROMISE SIGNALS:
+- Suspected compromise vector: ${ceCompromiseVector || 'Unknown'}
+- Recent account changes (email, phone, 2FA, API keys): ${ceRecentAcctChanges || 'Unknown'}
+- Device / location at time of transaction: ${ceDeviceNew || 'Unknown'}
+- Blockchain trace available: ${ceBlockchainTrace || 'Unknown'}
+
+CUSTOMER'S STATED REASON:
+${ceComplaint}
+
+REGULATORY CONTEXT:
+- Jurisdiction(s): ${ceRegLabel}
+${ceSarRequired ? `- ⚠ SAR/STR filing obligation triggered by amount` : '- No automatic SAR/STR threshold triggered'}
+
+CLASSIFICATION GUIDANCE:
+TRUE_FRAUD: SIM-swap or phishing confirmed/suspected, new device, account changes not made by customer, rapid draining of funds, customer reports not receiving 2FA codes, unusual withdrawal destination.
+FIRST_PARTY_FRAUD: Customer authorized trades during bull market but claims fraud after price crashed; customer-initiated withdrawal to their own wallet then claims unauthorized; high prior claims; no account anomalies; withdrawal matches customer's known wallets.
+CONSUMER_DISPUTE: Withdrawal delayed/failed, asset credited incorrectly, fee discrepancy, account incorrectly locked, trade filled at wrong price (platform error), staking rewards not credited.
+AUTHORIZED_PUSH_PAYMENT (pig butchering / investment scam): Customer voluntarily sent crypto to an "investment platform" promising high returns; customer was romanced or groomed over weeks/months; receiving address is external, unhosted wallet or unknown exchange; customer may have multiple transfers escalating in size.
+
+ROUTING FOR CRYPTO EXCHANGE:
+- TRUE_FRAUD (ATO) → immediate account freeze + blockchain trace + notify compliance: "ACCOUNT_FREEZE"
+- TRUE_FRAUD with external destination → contact receiving exchange compliance team (TRUST network / direct): "EXCHANGE_CONTACT"
+- AUTHORIZED_PUSH_PAYMENT → blockchain trace + law enforcement referral + SAR: "LEA_REFERRAL"
+- CONSUMER_DISPUTE → internal support escalation + goodwill review: "INTERNAL_REVIEW"
+- FIRST_PARTY_FRAUD → flag account, do not refund, document for SAR if pattern: "FLAG_INVESTIGATION"
+- SAR/STR threshold met → always add SAR note regardless of routing
+
+LAW ENFORCEMENT:
+- US: FBI Internet Crime Complaint Center (IC3.gov) + FinCEN SAR via BSA E-Filing
+- Canada: RCMP CAFC (Canadian Anti-Fraud Centre) + FINTRAC STR via FINTRAC portal
+- Both: Blockchain analytics referral (Chainalysis, Elliptic, TRM Labs) if internal tool unavailable
+
+ATO DETECTION: Account changes + new device + rapid/unusual withdrawals = ato_suspected: true. SIM-swap is a strong ATO signal — recommend immediate account freeze and identity re-verification.
+
+Return ONLY valid JSON, no markdown:
+{
+  "classification": "TRUE_FRAUD" | "FIRST_PARTY_FRAUD" | "CONSUMER_DISPUTE" | "AUTHORIZED_PUSH_PAYMENT",
+  "confidence": "HIGH" | "MEDIUM" | "LOW",
+  "label": "True Fraud" | "First-Party Fraud" | "Consumer Dispute" | "Authorized Push Payment",
+  "headline": "One tight sentence summarizing the triage assessment for a crypto exchange fraud team.",
+  "signals": ["Signal 1", "Signal 2", "Signal 3"],
+  "signal_influences": [
+    { "signal": "Specific signal from inputs", "weight": "HIGH" | "MEDIUM" | "LOW", "toward": "TRUE_FRAUD" | "FIRST_PARTY_FRAUD" | "CONSUMER_DISPUTE" | "AUTHORIZED_PUSH_PAYMENT" }
+  ],
+  "ato_suspected": true | false,
+  "ato_note": "Brief ATO/account compromise note if suspected, empty string otherwise.",
+  "sar_note": "${ceSarRequired ? 'SAR/STR filing required — document this classification and all signals.' : ''}",
+  "routing": "ACCOUNT_FREEZE" | "EXCHANGE_CONTACT" | "LEA_REFERRAL" | "INTERNAL_REVIEW" | "FLAG_INVESTIGATION",
+  "routing_label": "Human-readable routing label for crypto exchange analysts",
+  "routing_detail": "2–3 sentences on exact next steps: who to contact, what tool to use, time sensitivity, blockchain trace priority.",
+  "risk_notes": "Watch-outs specific to crypto exchange context — or empty string.",
+  "proceed_to_dispute": true | false
+}`
+
+    try {
+      const response = await fetch('/api/triage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1500, messages: [{ role: 'user', content: prompt }] }),
+      })
+      if (!response.ok) throw new Error(`API error: ${response.status}`)
+      const data = await response.json()
+      const text = data.content.filter(b => b.type === 'text').map(b => b.text).join('').replace(/```json|```/g, '').trim()
+      const parsed = JSON.parse(text)
+      setResult(parsed)
+      setOutcomes(prev => [{
+        id: `T-${Date.now().toString(36).toUpperCase().slice(-5)}`,
+        date: new Date().toISOString(),
+        merchant: ceReceivingExchange || ceDestinationAddress || '—',
+        amount: ceAmount ? `${ceAmount} ${ceCurrency}` : '—',
+        accountType: 'crypto_exchange',
+        network: ceChain || ceAsset || '',
+        verdict: parsed.classification,
+        confidence: parsed.confidence,
+        routing: parsed.routing,
+        outcome: 'pending',
+      }, ...prev].slice(0, 100))
+    } catch (e) {
+      setError(`Classification failed: ${e.message}`)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const markOutcome = (id, val) =>
     setOutcomes(prev => prev.map(o => o.id === id ? { ...o, outcome: val } : o))
 
@@ -367,19 +524,30 @@ Return ONLY valid JSON, no markdown:
     if (!result) return
     const caseId = outcomes[0]?.id ?? `T-${Date.now().toString(36).toUpperCase().slice(-5)}`
     const params = new URLSearchParams()
-    params.set('caseId',          caseId)
-    params.set('merchant',        merchant || '')
-    params.set('amount',          amount || '')
-    params.set('currency',        currency || 'CAD')
-    params.set('transactionDate', transactionDate || '')
-    params.set('network',         network || '')
-    params.set('accountType',     accountType || '')
-    params.set('classification',  result.classification || '')
-    params.set('confidence',      result.confidence || '')
-    params.set('headline',        result.headline || '')
-    params.set('routing',         result.routing || '')
-    // complaint can be long — truncate at 800 chars to stay within URL limits
-    params.set('complaint', (customerReason || '').slice(0, 800))
+    params.set('caseId',         caseId)
+    params.set('classification', result.classification || '')
+    params.set('confidence',     result.confidence || '')
+    params.set('headline',       result.headline || '')
+    params.set('routing',        result.routing || '')
+    if (isCE) {
+      // Crypto exchange handoff
+      params.set('merchant',        ceReceivingExchange || ceDestinationAddress || '')
+      params.set('amount',          ceAmount || '')
+      params.set('currency',        ceCurrency || 'USD')
+      params.set('transactionDate', ceTxDate || '')
+      params.set('network',         ceAsset ? `${ceAsset}${ceChain ? ` (${ceChain})` : ''}` : '')
+      params.set('accountType',     'crypto_exchange')
+      params.set('complaint',       ceComplaint.slice(0, 800))
+    } else {
+      // FI handoff
+      params.set('merchant',        merchant || '')
+      params.set('amount',          amount || '')
+      params.set('currency',        currency || 'CAD')
+      params.set('transactionDate', transactionDate || '')
+      params.set('network',         network || '')
+      params.set('accountType',     accountType || '')
+      params.set('complaint',       customerReason.slice(0, 800))
+    }
     window.open(`https://dispute-desk-tau.vercel.app?${params.toString()}`, '_blank', 'noopener,noreferrer')
   }
 
@@ -440,8 +608,28 @@ Return ONLY valid JSON, no markdown:
             <span style={{ fontWeight: 700 }}>Tri</span><span style={{ fontStyle: 'italic', fontWeight: 500 }}>age</span>
           </h1>
           <p className="display-font text-stone-700 mt-3 sm:mt-4 max-w-2xl" style={{ fontSize: 'clamp(15px, 2vw, 17px)', lineHeight: '1.55' }}>
-            Classify incoming dispute claims before anything is filed. Four verdicts. Every case routed by account type, payment rail, and regulatory framework — Reg E, Reg Z, NACHA, or provider.
+            {isCE
+              ? 'Crypto exchange fraud triage. Four verdicts. FinCEN + FINTRAC aware. Built for exchange fraud analysts handling ATO, pig butchering, and consumer disputes on digital asset platforms.'
+              : 'Classify incoming dispute claims before anything is filed. Four verdicts. Every case routed by account type, payment rail, and regulatory framework — Reg E, Reg Z, NACHA, or provider.'}
           </p>
+
+          {/* ── Platform mode toggle ── */}
+          <div className="mt-5 flex gap-1 p-1 w-fit" style={{ background: '#E8E3DA' }}>
+            {[
+              { id: 'fi', label: 'Financial Institution' },
+              { id: 'ce', label: 'Crypto Exchange' },
+            ].map(m => (
+              <button
+                key={m.id}
+                onClick={() => { setPlatformMode(m.id); setResult(null); setError(null) }}
+                className="mono-font text-xs tracking-widest px-4 py-2 transition-all"
+                style={{
+                  background: platformMode === m.id ? '#1A1814' : 'transparent',
+                  color:      platformMode === m.id ? '#F5F1EA' : '#6B5F4D',
+                }}
+              >{m.label}</button>
+            ))}
+          </div>
         </div>
 
         {/* ── Two-column layout ────────────────────────────────────────────────── */}
@@ -450,6 +638,288 @@ Return ONLY valid JSON, no markdown:
           {/* ══ LEFT: Inputs ══════════════════════════════════════════════════════ */}
           <div>
 
+          {/* ════════ CRYPTO EXCHANGE MODE FORM ════════ */}
+          {isCE && (
+            <>
+              {/* CE 01 — Account & Transaction */}
+              <div className="flex items-baseline gap-3 mb-5">
+                <span className="mono-font text-xs text-stone-400">01</span>
+                <h2 className="display-font font-semibold text-2xl text-stone-900" style={{ letterSpacing: '-0.01em' }}>Account &amp; Transaction</h2>
+              </div>
+
+              {/* Jurisdiction */}
+              <div className="mb-4">
+                <label className="input-label">Jurisdiction</label>
+                <select value={ceCountry} onChange={e => setCeCountry(e.target.value)} className="input-field" style={{ fontSize: '14px' }}>
+                  <option value="both">Both — US (FinCEN) + Canada (FINTRAC)</option>
+                  <option value="us">United States — FinCEN / BSA</option>
+                  <option value="ca">Canada — FINTRAC / PCMLTFA</option>
+                </select>
+                {ceRegLabel && (
+                  <div className="flex items-start gap-3 py-2">
+                    <span className="mono-font text-xs px-2 py-1 shrink-0" style={{ background: '#064E3B', color: '#6EE7B7' }}>{ceRegLabel}</span>
+                    <span className="mono-font text-xs text-stone-400 leading-relaxed">{ceRegSubtext}</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-4 mb-5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="input-label">Account Type</label>
+                    <select value={ceAccountType} onChange={e => setCeAccountType(e.target.value)} className="input-field" style={{ fontSize: '14px' }}>
+                      <option value="">Select…</option>
+                      <option value="Standard retail account">Standard retail account</option>
+                      <option value="Business / corporate account">Business / corporate account</option>
+                      <option value="API / programmatic access">API / programmatic access</option>
+                      <option value="OTC desk account">OTC desk account</option>
+                      <option value="Institutional account">Institutional account</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="input-label">KYC Level</label>
+                    <select value={ceKycLevel} onChange={e => setCeKycLevel(e.target.value)} className="input-field" style={{ fontSize: '14px' }}>
+                      <option value="">Unknown</option>
+                      <option value="Tier 1 — email only">Tier 1 — email only</option>
+                      <option value="Tier 2 — ID verified">Tier 2 — ID verified</option>
+                      <option value="Tier 3 — full KYB / enhanced due diligence">Tier 3 — full KYB / EDD</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="input-label">Digital Asset</label>
+                    <select value={ceAsset} onChange={e => setCeAsset(e.target.value)} className="input-field" style={{ fontSize: '14px' }}>
+                      <option value="">Select asset…</option>
+                      <option>BTC (Bitcoin)</option>
+                      <option>ETH (Ethereum)</option>
+                      <option>USDT (Tether)</option>
+                      <option>USDC (USD Coin)</option>
+                      <option>SOL (Solana)</option>
+                      <option>XRP (Ripple)</option>
+                      <option>BNB (BNB Chain)</option>
+                      <option>MATIC (Polygon)</option>
+                      <option>Other / Unknown</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="input-label">Blockchain Network</label>
+                    <select value={ceChain} onChange={e => setCeChain(e.target.value)} className="input-field" style={{ fontSize: '14px' }}>
+                      <option value="">Select chain…</option>
+                      <option>Bitcoin mainnet</option>
+                      <option>Ethereum mainnet</option>
+                      <option>Solana</option>
+                      <option>BNB Chain</option>
+                      <option>Polygon</option>
+                      <option>Tron (TRC-20)</option>
+                      <option>Avalanche</option>
+                      <option>Unknown / off-chain</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="input-label">Transaction Type</label>
+                    <select value={ceTxType} onChange={e => setCeTxType(e.target.value)} className="input-field" style={{ fontSize: '14px' }}>
+                      <option value="">Select…</option>
+                      <option>External withdrawal</option>
+                      <option>Internal transfer</option>
+                      <option>Spot trade / conversion</option>
+                      <option>Fiat deposit → crypto purchase</option>
+                      <option>Fiat off-ramp (crypto → fiat)</option>
+                      <option>Staking / yield withdrawal</option>
+                      <option>API-initiated trade or transfer</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="input-label">Transaction Date</label>
+                    <input type="date" value={ceTxDate} onChange={e => setCeTxDate(e.target.value)} className="input-field mono-font" style={{ fontSize: '13px' }} />
+                    {ceDaysSince !== null && (
+                      <div className="mono-font text-xs text-stone-400 mt-1.5">
+                        {ceDaysSince === 0 ? 'Today' : `${ceDaysSince} day${ceDaysSince !== 1 ? 's' : ''} ago`}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Amount + SAR flag */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="input-label">Amount</label>
+                    <div className="flex gap-2">
+                      <input type="text" value={ceAmount} onChange={e => setCeAmount(e.target.value)} placeholder="0.00" className="input-field" style={{ flex: 2 }} />
+                      <select value={ceCurrency} onChange={e => setCeCurrency(e.target.value)} className="input-field mono-font" style={{ flex: 1, fontSize: '13px' }}>
+                        <option>USD</option>
+                        <option>CAD</option>
+                        <option>EUR</option>
+                        <option>GBP</option>
+                        <option>BTC</option>
+                        <option>ETH</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div className="flex items-end">
+                    {ceSarRequired && (
+                      <div className="w-full px-3 py-2.5" style={{ background: '#FEF3C7', border: '1px solid #92400E' }}>
+                        <div className="mono-font text-xs tracking-widest" style={{ color: '#92400E' }}>⚠ SAR / STR THRESHOLD</div>
+                        <div className="mono-font text-xs mt-0.5" style={{ color: '#78350F' }}>
+                          {ceSarFlagUS && 'FinCEN SAR required (≥$5k USD)'}
+                          {ceSarFlagUS && ceStrFlagCA && ' · '}
+                          {ceStrFlagCA && 'FINTRAC STR required (≥$10k CAD)'}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <hr className="section-rule" />
+
+              {/* CE 02 — Destination & Recovery */}
+              <div className="flex items-baseline gap-3 mb-5">
+                <span className="mono-font text-xs text-stone-400">02</span>
+                <h2 className="display-font font-semibold text-2xl text-stone-900" style={{ letterSpacing: '-0.01em' }}>Destination &amp; Recovery</h2>
+              </div>
+              <div className="space-y-4 mb-5">
+                <div>
+                  <label className="input-label">Destination Type</label>
+                  <select value={ceDestinationType} onChange={e => setCeDestinationType(e.target.value)} className="input-field" style={{ fontSize: '14px' }}>
+                    <option value="">Unknown</option>
+                    <option value="External unhosted wallet (self-custody)">External unhosted wallet</option>
+                    <option value="Known regulated exchange">Known regulated exchange</option>
+                    <option value="Unknown / suspicious exchange">Unknown / suspicious exchange</option>
+                    <option value="Internal platform wallet">Internal platform wallet</option>
+                    <option value="DeFi protocol / smart contract">DeFi protocol / smart contract</option>
+                  </select>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="input-label">Destination Address / Exchange</label>
+                    <input type="text" value={ceDestinationAddress} onChange={e => setCeDestinationAddress(e.target.value)} placeholder="0x... or exchange name" className="input-field mono-font" style={{ fontSize: '12px' }} />
+                  </div>
+                  <div>
+                    <label className="input-label">Receiving Exchange (if known)</label>
+                    <input type="text" value={ceReceivingExchange} onChange={e => setCeReceivingExchange(e.target.value)} placeholder="e.g. Binance, OKX, Kraken" className="input-field" style={{ fontSize: '14px' }} />
+                  </div>
+                </div>
+                <div>
+                  <label className="input-label">Blockchain Trace Available</label>
+                  <select value={ceBlockchainTrace} onChange={e => setCeBlockchainTrace(e.target.value)} className="input-field" style={{ fontSize: '14px' }}>
+                    <option value="">Unknown</option>
+                    <option value="Yes — funds still traceable on-chain">Yes — funds still traceable on-chain</option>
+                    <option value="Yes — but already moved / mixed">Yes — but already moved or mixed</option>
+                    <option value="No — off-chain or unknown destination">No — off-chain or unknown</option>
+                  </select>
+                </div>
+              </div>
+
+              <hr className="section-rule" />
+
+              {/* CE 03 — Claim & Compromise Signals */}
+              <div className="flex items-baseline gap-3 mb-2">
+                <span className="mono-font text-xs text-stone-400">03</span>
+                <h2 className="display-font font-semibold text-2xl text-stone-900" style={{ letterSpacing: '-0.01em' }}>Claim &amp; Signals</h2>
+              </div>
+              <p className="display-font text-stone-500 text-[14px] mb-5 ml-7 italic" style={{ lineHeight: '1.5' }}>Fill what you know. Unknowns are treated as neutral.</p>
+
+              <div className="space-y-4 mb-5">
+                <div>
+                  <label className="input-label">How Was This Flagged?</label>
+                  <select value={ceFlaggedBy} onChange={e => setCeFlaggedBy(e.target.value)} className="input-field" style={{ fontSize: '14px' }}>
+                    <option value="">Select…</option>
+                    <option>Customer-reported (app / support ticket)</option>
+                    <option>Customer-reported (email / chat)</option>
+                    <option>Customer-reported (phone / live agent)</option>
+                    <option>Automated fraud system alert</option>
+                    <option>Compliance team flagged (SAR review)</option>
+                    <option>Blockchain analytics alert (Chainalysis / Elliptic)</option>
+                    <option>Law enforcement inquiry</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="input-label">Suspected Compromise Vector</label>
+                  <select value={ceCompromiseVector} onChange={e => setCeCompromiseVector(e.target.value)} className="input-field" style={{ fontSize: '14px' }}>
+                    <option value="">Unknown / not determined</option>
+                    <option value="SIM-swap — mobile number ported or hijacked">SIM-swap</option>
+                    <option value="Phishing — fake exchange website or email">Phishing — fake exchange or email</option>
+                    <option value="Credential stuffing — reused password from data breach">Credential stuffing / password breach</option>
+                    <option value="API key theft — programmatic unauthorized access">API key theft</option>
+                    <option value="Social engineering — fake support agent or impersonation">Social engineering / fake support</option>
+                    <option value="Investment / pig butchering scam — customer voluntarily sent funds">Investment scam / pig butchering</option>
+                    <option value="Malware / device compromise">Malware / device compromise</option>
+                    <option value="Insider threat — potential internal actor">Insider threat</option>
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="input-label">Recent Account Changes</label>
+                    <select value={ceRecentAcctChanges} onChange={e => setCeRecentAcctChanges(e.target.value)} className="input-field" style={{ fontSize: '14px' }}>
+                      <option value="">Unknown</option>
+                      <option value="Yes — email, phone, 2FA, or API keys changed recently">Yes — email / phone / 2FA / API changed</option>
+                      <option value="No recent account changes detected">No recent changes</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="input-label">Device / Location</label>
+                    <select value={ceDeviceNew} onChange={e => setCeDeviceNew(e.target.value)} className="input-field" style={{ fontSize: '14px' }}>
+                      <option value="">Unknown</option>
+                      <option value="New or unrecognized device / IP flagged">New or unrecognized device / IP</option>
+                      <option value="Known device and location">Known device and location</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="input-label">Prior Claims (12 months)</label>
+                    <select value={cePriorClaims} onChange={e => setCePriorClaims(e.target.value)} className="input-field" style={{ fontSize: '14px' }}>
+                      <option value="">Unknown</option>
+                      <option>None</option>
+                      <option>1</option>
+                      <option>2–3</option>
+                      <option>4+</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="input-label">Customer's Stated Reason <span style={{ color: '#B45309' }}>*</span></label>
+                  <textarea
+                    value={ceComplaint}
+                    onChange={e => setCeComplaint(e.target.value)}
+                    placeholder="What is the customer saying happened? Include any details about how they believe the fraud occurred…"
+                    rows={5}
+                    className="input-field"
+                    style={{ resize: 'vertical' }}
+                  />
+                </div>
+              </div>
+
+              {/* CE CTA */}
+              <div className="mt-8">
+                <button
+                  onClick={classifyCE}
+                  disabled={loading || !ceComplaint.trim()}
+                  className="w-full bg-stone-900 text-stone-50 py-4 mono-font text-xs tracking-widest hover:bg-stone-800 disabled:bg-stone-400 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-3 group"
+                >
+                  {loading
+                    ? <><Loader2 className="w-4 h-4 animate-spin" /><span>CLASSIFYING CLAIM</span></>
+                    : <><Bitcoin className="w-4 h-4" /><span>CLASSIFY EXCHANGE CLAIM</span><ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" /></>
+                  }
+                </button>
+                {error && (
+                  <div className="mt-4 border border-red-700 bg-red-50 p-4 flex gap-3 items-start">
+                    <AlertCircle className="w-5 h-5 text-red-700 shrink-0 mt-0.5" />
+                    <div className="display-font text-sm text-red-900">{error}</div>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+
+          {/* ════════ FI MODE FORM ════════ */}
+          {!isCE && (
+            <>
             {/* 01 — Transaction Details */}
             <div className="flex items-baseline gap-3 mb-5">
               <span className="mono-font text-xs text-stone-400">01</span>
@@ -796,7 +1266,9 @@ Return ONLY valid JSON, no markdown:
                 </div>
               )}
             </div>
-          </div>
+            </> /* end FI mode form */
+          )}
+          </div> {/* end LEFT column */}
 
           {/* ══ RIGHT: Output ══════════════════════════════════════════════════════ */}
           <div>
@@ -824,13 +1296,33 @@ Return ONLY valid JSON, no markdown:
             {result && cfg && (
               <div className="space-y-4">
 
-                {/* Reg framework badge */}
-                {regLabel && (
+                {/* Reg framework badge — FI mode */}
+                {!isCE && regLabel && (
                   <div className="flex items-center gap-2">
                     <span className="mono-font text-xs px-2 py-0.5" style={{ background: regColor.bg, color: regColor.text }}>
                       {regLabel}
                     </span>
                     <span className="mono-font text-xs text-stone-400 uppercase tracking-wider">framework</span>
+                  </div>
+                )}
+
+                {/* CE: jurisdiction + SAR flag */}
+                {isCE && (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className="mono-font text-xs px-2 py-0.5" style={{ background: '#064E3B', color: '#6EE7B7' }}>{ceRegLabel}</span>
+                      <span className="mono-font text-xs text-stone-400 uppercase tracking-wider">jurisdiction</span>
+                    </div>
+                    {ceSarRequired && (
+                      <div className="flex items-center gap-2 px-3 py-2" style={{ background: '#FEF3C7', border: '1px solid #D97706' }}>
+                        <span className="mono-font text-xs tracking-widest" style={{ color: '#92400E' }}>
+                          ⚠ SAR/STR FILING REQUIRED — document this case before closing
+                        </span>
+                      </div>
+                    )}
+                    {result.sar_note && !ceSarRequired && (
+                      <div className="mono-font text-xs text-stone-400 italic">{result.sar_note}</div>
+                    )}
                   </div>
                 )}
 
