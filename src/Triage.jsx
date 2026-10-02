@@ -362,29 +362,25 @@ Return ONLY valid JSON, no markdown:
     })
   }
 
-  // ── Handoff to Dispute Desk via localStorage ─────────────────────────────────
+  // ── Handoff to Dispute Desk via URL query params (localStorage is per-origin) ──
   const handleProceedToDisputeDesk = () => {
     if (!result) return
-    const handoff = {
-      caseId: outcomes[0]?.id ?? `T-${Date.now().toString(36).toUpperCase().slice(-5)}`,
-      merchant,
-      amount,
-      currency,
-      transactionDate,
-      network,
-      accountType,
-      transactionType,
-      cryptoScenario: isCrypto || detectedCrypto ? cryptoScenario : '',
-      classification: result.classification,
-      confidence: result.confidence,
-      headline: result.headline,
-      routing: result.routing,
-      routingLabel: result.routing_label,
-      complaint: customerReason,
-      timestamp: new Date().toISOString(),
-    }
-    try { localStorage.setItem('dd_triage_handoff', JSON.stringify(handoff)) } catch {}
-    window.open('https://dispute-desk-tau.vercel.app', '_blank', 'noopener,noreferrer')
+    const caseId = outcomes[0]?.id ?? `T-${Date.now().toString(36).toUpperCase().slice(-5)}`
+    const params = new URLSearchParams()
+    params.set('caseId',          caseId)
+    params.set('merchant',        merchant || '')
+    params.set('amount',          amount || '')
+    params.set('currency',        currency || 'CAD')
+    params.set('transactionDate', transactionDate || '')
+    params.set('network',         network || '')
+    params.set('accountType',     accountType || '')
+    params.set('classification',  result.classification || '')
+    params.set('confidence',      result.confidence || '')
+    params.set('headline',        result.headline || '')
+    params.set('routing',         result.routing || '')
+    // complaint can be long — truncate at 800 chars to stay within URL limits
+    params.set('complaint', (customerReason || '').slice(0, 800))
+    window.open(`https://dispute-desk-tau.vercel.app?${params.toString()}`, '_blank', 'noopener,noreferrer')
   }
 
   // ─── Render ───────────────────────────────────────────────────────────────────
